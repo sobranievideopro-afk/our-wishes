@@ -27,9 +27,6 @@ jobs:
           version: 11.19.0
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm run build
-        env:
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:

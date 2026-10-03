@@ -3,7 +3,7 @@ import {
   Bell, BellRing, Building2, Camera, Car, Check, CheckCircle2, ChevronLeft,
   CircleUserRound, Compass, ExternalLink, Filter, Flower2, Gem, Gift, Heart,
   HeartHandshake, House, Image as ImageIcon, Link2, LoaderCircle, MapPin,
-  MessageCircle, MoreHorizontal, Paperclip, Plane, Plus, Search, Send,
+  LayoutGrid, MessageCircle, MoreHorizontal, Paperclip, Plane, Plus, RectangleHorizontal, Search, Send,
   Settings, Share2, Shuffle, SlidersHorizontal, Sparkles, Star, TreePine,
   Upload, UserRound, X,
 } from 'lucide-react'
@@ -146,6 +146,7 @@ function App() {
 
   const selectedWish = data.wishes.find((wish) => wish.id === selectedWishId)
   const unread = data.messages.filter((message) => message.author !== role && !message.read).length
+  const completedCount = data.wishes.filter((wish) => wish.completedAt).length
 
   return (
     <div className="app-shell">
@@ -174,7 +175,7 @@ function App() {
           const Icon = item.icon
           return (
             <button key={item.id} className={activeTab === item.id ? 'active' : ''} onClick={() => setActiveTab(item.id)}>
-              <span className="nav-icon"><Icon size={21} strokeWidth={activeTab === item.id ? 2.4 : 1.8} />{item.id === 'chat' && unread > 0 && <i>{unread}</i>}</span>
+              <span className="nav-icon"><Icon size={21} strokeWidth={activeTab === item.id ? 2.4 : 1.8} />{item.id === 'chat' && unread > 0 && <i>{unread}</i>}{item.id === 'done' && completedCount > 0 && <i className="done-count">{completedCount}</i>}</span>
               <span>{item.label}</span>
             </button>
           )
@@ -257,6 +258,12 @@ function WishesView({ data, role, onOpen, onAdd, onPatch }: {
   const [minStars, setMinStars] = useState(0)
   const [maxPrice, setMaxPrice] = useState<number | undefined>()
   const [onlyReserved, setOnlyReserved] = useState(false)
+  const [viewMode, setViewMode] = useState<'single' | 'double'>(() => localStorage.getItem('our-wishes-view') === 'single' ? 'single' : 'double')
+
+  function changeView(mode: 'single' | 'double') {
+    setViewMode(mode)
+    localStorage.setItem('our-wishes-view', mode)
+  }
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase('ru')
@@ -304,9 +311,9 @@ function WishesView({ data, role, onOpen, onAdd, onPatch }: {
         </div>
       )}
 
-      <div className="results-head"><span>{filtered.length} {plural(filtered.length, ['желание', 'желания', 'желаний'])}</span>{(query || category !== 'all' || minStars || maxPrice || onlyReserved) && <button onClick={() => { setQuery(''); setCategory('all'); setMinStars(0); setMaxPrice(undefined); setOnlyReserved(false) }}>Сбросить</button>}</div>
+      <div className="results-head"><span>{filtered.length} {plural(filtered.length, ['желание', 'желания', 'желаний'])}</span><div className="results-controls">{(query || category !== 'all' || minStars || maxPrice || onlyReserved) && <button onClick={() => { setQuery(''); setCategory('all'); setMinStars(0); setMaxPrice(undefined); setOnlyReserved(false) }}>Сбросить</button>}<div className="view-switch" aria-label="Вид карточек"><button className={viewMode === 'single' ? 'active' : ''} onClick={() => changeView('single')} aria-label="Одна карточка в ряд"><RectangleHorizontal size={16} /></button><button className={viewMode === 'double' ? 'active' : ''} onClick={() => changeView('double')} aria-label="Две карточки в ряд"><LayoutGrid size={16} /></button></div></div></div>
 
-      {filtered.length ? <div className="wish-grid">{filtered.map((wish) => <WishCard key={wish.id} wish={wish} role={role} onOpen={() => onOpen(wish.id)} onPatch={(patch) => onPatch(wish.id, patch)} />)}</div> : (
+      {filtered.length ? <div className={`wish-grid ${viewMode}`}>{filtered.map((wish) => <WishCard key={wish.id} wish={wish} role={role} onOpen={() => onOpen(wish.id)} onPatch={(patch) => onPatch(wish.id, patch)} />)}</div> : (
         <EmptyState icon={<Search />} title="Ничего не нашлось" text="Попробуйте изменить фильтры или добавить новое желание." action={role === 'wife' ? <button className="primary-button" onClick={onAdd}><Plus size={18} />Добавить желание</button> : undefined} />
       )}
     </div>

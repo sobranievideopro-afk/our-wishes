@@ -68,7 +68,15 @@ a { color: inherit; text-decoration: none; }
 .check-label input { accent-color: var(--pink); }
 .results-head { margin: 24px 2px 12px; display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
 .results-head button { border: 0; background: transparent; color: var(--pink-deep); font-size: 11px; }
+.results-controls { display: flex; align-items: center; gap: 10px; }
+.view-switch { display: flex; padding: 3px; border: 1px solid var(--line); background: white; border-radius: 10px; }
+.view-switch button { width: 29px; height: 25px; padding: 0; display: grid; place-items: center; color: #a08e96; border-radius: 7px; }
+.view-switch button.active { color: white; background: var(--pink); }
 .wish-grid { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 18px; }
+.wish-grid.double { grid-template-columns: repeat(2, minmax(0,1fr)); }
+.wish-grid.single { grid-template-columns: minmax(0,1fr); max-width: 680px; margin-left: auto; margin-right: auto; }
+.wish-grid.single .wish-image-wrap { height: 370px; }
+.wish-grid.single .wish-card h3 { min-height: 0; font-size: 17px; }
 .wish-card { overflow: hidden; border-radius: 21px; background: white; border: 1px solid rgba(238,223,229,.9); box-shadow: 0 10px 35px rgba(77,34,52,.075); transition: transform .25s ease, box-shadow .25s ease; cursor: pointer; }
 .wish-card:hover { transform: translateY(-3px); box-shadow: 0 16px 40px rgba(77,34,52,.12); }
 .wish-image-wrap { height: 220px; background: var(--pink-soft); position: relative; overflow: hidden; }
@@ -90,6 +98,7 @@ a { color: inherit; text-decoration: none; }
 .bottom-nav button.active { color: var(--pink-deep); font-weight: 700; }
 .nav-icon { position: relative; line-height: 0; }
 .nav-icon i { position: absolute; right: -8px; top: -6px; min-width: 15px; height: 15px; padding: 0 3px; border: 2px solid white; background: #d74973; color: white; display: grid; place-items: center; border-radius: 99px; font-size: 8px; font-style: normal; }
+.nav-icon i.done-count { background: #6f9a79; }
 .floating-add { position: fixed; z-index: 49; right: max(26px, calc((100vw - 1180px)/2 + 28px)); bottom: 95px; border: 0; color: white; background: linear-gradient(145deg,#d57493,#ad4163); box-shadow: 0 13px 28px rgba(173,65,99,.28); padding: 14px 18px; border-radius: 17px; display: flex; gap: 7px; align-items: center; font-size: 12px; font-weight: 700; }
 
 /* welcome */
@@ -321,6 +330,9 @@ fieldset legend { margin-bottom: 8px; }
   .filters-panel { grid-template-columns: 1fr 1fr; gap: 12px; }
   .filters-panel label:last-child { grid-column: 1/-1; }
   .wish-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 10px; }
+  .wish-grid.double { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .wish-grid.single { grid-template-columns: minmax(0,1fr); max-width: none; }
+  .wish-grid.single .wish-image-wrap { height: 300px; }
   .wish-image-wrap { height: 190px; }
   .wish-card { border-radius: 17px; }
   .wish-card-body { padding: 12px; }
