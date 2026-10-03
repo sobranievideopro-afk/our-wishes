@@ -14,6 +14,7 @@ export const categories: { id: CategoryId; label: string; icon: string }[] = [
 ]
 
 export const seedData: AppData = {
+  members: { wife: { displayName: 'Алла' }, husband: { displayName: 'Стас' } },
   wishes: [
     {
       id: 'w1', title: 'Золотые серьги с жемчугом',

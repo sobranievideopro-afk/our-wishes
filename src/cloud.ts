@@ -1,6 +1,6 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase, uid } from './lib'
-import type { AppData, CalendarEvent, ChatMessage, Role, Wish, WishComment } from './types'
+import type { AppData, CalendarEvent, ChatMessage, MemberProfile, Role, Wish, WishComment } from './types'
 
 export interface CloudProfile {
   id: string
@@ -115,7 +115,15 @@ export async function joinCloudCouple(code: string): Promise<CloudProfile> {
 async function mediaUrl(path?: string | null) {
   if (!path) return undefined
   if (/^(https?:|data:)/.test(path)) return path
-  const { data } = await client().storage.from('couple-media').createSignedUrl(path, 60 * 60)
+  const cacheKey = `our-wishes-media:${path}`
+  try {
+    const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null')
+    if (cached?.url && cached.expiresAt > Date.now()) return cached.url as string
+  } catch { /* create a fresh signed URL */ }
+  const { data } = await client().storage.from('couple-media').createSignedUrl(path, 60 * 60 * 24 * 7)
+  if (data?.signedUrl) {
+    try { localStorage.setItem(cacheKey, JSON.stringify({ url: data.signedUrl, expiresAt: Date.now() + 6 * 24 * 60 * 60 * 1000 })) } catch { /* storage can be full */ }
+  }
   return data?.signedUrl
 }
 
@@ -127,12 +135,18 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     retryResult(() => api.from('wish_likes').select('*')),
     profile.role === 'husband' ? retryResult(() => api.from('wish_reservations').select('*')) : Promise.resolve({ data: [] }),
     retryResult(() => api.from('messages').select('*').eq('couple_id', profile.coupleId).order('created_at')),
-    retryResult(() => api.from('profiles').select('id,role').eq('couple_id', profile.coupleId)),
+    retryResult(() => api.from('profiles').select('id,role,display_name,avatar_path').eq('couple_id', profile.coupleId)),
     retryResult(() => api.from('couple_events').select('*').eq('couple_id', profile.coupleId).order('event_date')),
     retryResult(() => api.from('message_likes').select('*')),
     profile.role === 'husband' ? retryResult(() => api.from('wish_views').select('wish_id').eq('user_id', profile.id)) : Promise.resolve({ data: [] }),
   ])
-  const roleById = new Map((profilesResult.data || []).map((item: any) => [item.id, item.role as Role]))
+  const profileRows = profilesResult.data || []
+  const roleById = new Map(profileRows.map((item: any) => [item.id, item.role as Role]))
+  const members: Record<Role, MemberProfile> = { wife: { displayName: 'Алла' }, husband: { displayName: 'Стас' } }
+  await Promise.all(profileRows.map(async (item: any) => {
+    const memberRole = item.role as Role
+    members[memberRole] = { displayName: item.display_name || (memberRole === 'wife' ? 'Алла' : 'Стас'), avatar: await mediaUrl(item.avatar_path) }
+  }))
   const likedIds = new Set((likesResult.data || []).filter((item: any) => item.user_id === profile.id).map((item: any) => item.wish_id))
   const reservedIds = new Set((reservationsResult.data || []).map((item: any) => item.wish_id))
   const messageLikeRows = messageLikesResult.data || []
@@ -159,16 +173,32 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
   const comments: WishComment[] = (commentsResult.data || []).map((row: any) => ({ id: row.id, wishId: row.wish_id, author: roleById.get(row.author_id) || 'wife', text: row.text, createdAt: row.created_at }))
   const messages: ChatMessage[] = await Promise.all((messagesResult.data || []).map(async (row: any) => ({ id: row.id, author: roleById.get(row.author_id) || 'wife', text: row.text || undefined, image: await mediaUrl(row.image_path), createdAt: row.created_at, read: true, likedByMe: messageLikeRows.some((like: any) => like.message_id === row.id && like.user_id === profile.id), likeCount: messageLikeRows.filter((like: any) => like.message_id === row.id).length })))
   const events: CalendarEvent[] = (eventsResult.data || []).map((row: any) => ({ id: row.id, title: row.title, date: row.event_date, time: row.event_time?.slice(0, 5) || undefined, note: row.note || undefined, emojis: row.emojis || [], author: roleById.get(row.author_id) || 'wife', createdAt: row.created_at }))
-  return { wishes, comments, messages, events }
+  return { wishes, comments, messages, events, members }
 }
 
 async function uploadDataUrl(value: string | undefined, profile: CloudProfile, folder: 'wishes' | 'chat' | 'profiles') {
-  if (!value || !value.startsWith('data:')) return value
+  if (!value) return value
+  try {
+    if (/^https?:/.test(value)) {
+      const optimized = await client().functions.invoke('optimize-media', { body: { sourceUrl: value, folder } })
+      if (!optimized.error && optimized.data?.path) return optimized.data.path as string
+      return value
+    }
+    if (!value.startsWith('data:')) return value
+    const response = await fetch(value)
+    const blob = await response.blob()
+    const form = new FormData()
+    form.append('file', blob, 'photo.jpg')
+    form.append('folder', folder)
+    const optimized = await client().functions.invoke('optimize-media', { body: form })
+    if (!optimized.error && optimized.data?.path) return optimized.data.path as string
+  } catch { /* fall through to direct upload */ }
+  if (!value.startsWith('data:')) return value
   const response = await fetch(value)
   const blob = await response.blob()
   const ext = blob.type.split('/')[1]?.replace('jpeg', 'jpg') || 'jpg'
   const path = `${profile.coupleId}/${folder}/${uid('media')}.${ext}`
-  await retryResult(() => client().storage.from('couple-media').upload(path, blob, { contentType: blob.type, upsert: false }))
+  await retryResult(() => client().storage.from('couple-media').upload(path, blob, { contentType: blob.type, cacheControl: '31536000', upsert: false }))
   return path
 }
 
@@ -292,6 +322,7 @@ export function subscribeToCloud(profile: CloudProfile, refresh: () => void): Re
     .on('postgres_changes', { event: '*', schema: 'public', table: 'couple_events', filter: `couple_id=eq.${profile.coupleId}` }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'message_likes' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'wish_views' }, refresh)
+    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `couple_id=eq.${profile.coupleId}` }, refresh)
     .subscribe()
 }
 

@@ -14,7 +14,7 @@ export function loadDemoData(): AppData {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return structuredClone(seedData)
     const parsed = JSON.parse(stored) as AppData
-    return { ...parsed, events: parsed.events || [] }
+    return { ...parsed, events: parsed.events || [], members: parsed.members || { wife: { displayName: 'Алла' }, husband: { displayName: 'Стас' } } }
   } catch {
     return structuredClone(seedData)
   }

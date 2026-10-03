@@ -55,9 +55,15 @@ export interface CalendarEvent {
   createdAt: string
 }
 
+export interface MemberProfile {
+  displayName: string
+  avatar?: string
+}
+
 export interface AppData {
   wishes: Wish[]
   comments: WishComment[]
   messages: ChatMessage[]
   events: CalendarEvent[]
+  members: Record<Role, MemberProfile>
 }

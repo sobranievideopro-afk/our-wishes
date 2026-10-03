@@ -1,11 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  Bell, BellRing, Building2, CalendarDays, Camera, Car, Check, CheckCircle2, ChevronLeft,
+  Bell, BellRing, Building2, CalendarDays, Camera, Car, Check, CheckCircle2, ChevronLeft, Crop,
   CircleUserRound, Compass, ExternalLink, Filter, Flower2, Gem, Gift, Heart,
   HeartHandshake, House, Image as ImageIcon, Link2, LoaderCircle, MapPin,
   LayoutGrid, MessageCircle, MoreHorizontal, Paperclip, Plane, Plus, RectangleHorizontal, Search, Send,
   Pencil, Settings, Share2, Shuffle, SlidersHorizontal, Sparkles, Star, Trash2, TreePine,
-  Upload, UserRound, X,
+  Upload, UserRound, X, ZoomIn,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { categories } from './data'
@@ -16,7 +16,7 @@ import {
   joinCloudCouple, linkCloudAccount, markCloudWishSeen, notifyPartner, restoreProfile, setCloudCompleted, setCloudLike, setCloudMessageLike, setCloudReservation,
   signOutCloud, subscribeToCloud, updateCloudEvent, updateCloudProfile, updateCloudWish, type AuthMode, type CloudProfile,
 } from './cloud'
-import type { AppData, CalendarEvent, CategoryId, ChatMessage, Role, Tab, Wish } from './types'
+import type { AppData, CalendarEvent, CategoryId, ChatMessage, MemberProfile, Role, Tab, Wish } from './types'
 
 const iconMap: Record<string, LucideIcon> = {
   Gift, HeartHandshake, TreePine, Flower2, MapPin, Plane, Car, House, Building2, Gem,
@@ -32,8 +32,9 @@ const navItems: { id: Tab; label: string; icon: LucideIcon }[] = [
 
 type Sort = 'new' | 'stars' | 'cheap' | 'expensive'
 
-type ProfileView = { displayName: string; avatar?: string }
+type ProfileView = MemberProfile
 const defaultProfiles: Record<Role, ProfileView> = { wife: { displayName: 'Алла' }, husband: { displayName: 'Стас' } }
+const emptyData = (): AppData => ({ wishes: [], comments: [], messages: [], events: [], members: structuredClone(defaultProfiles) })
 
 function loadDemoProfiles(): Record<Role, ProfileView> {
   try {
@@ -44,12 +45,41 @@ function loadDemoProfiles(): Record<Role, ProfileView> {
 function initialFor(name: string) { return name.trim().charAt(0).toLocaleUpperCase('ru') || '♡' }
 
 function UserAvatar({ displayName, avatar, className = '' }: ProfileView & { className?: string }) {
-  return <span className={`user-avatar ${className}`}>{avatar ? <img src={avatar} alt="" /> : initialFor(displayName)}</span>
+  return <span className={`user-avatar ${className}`}>{avatar ? <img src={avatar} alt="" loading="lazy" decoding="async" /> : initialFor(displayName)}</span>
+}
+
+function ImageCropper({ source, aspect, onCancel, onDone }: { source: string; aspect: number; onCancel: () => void; onDone: (value: string) => void }) {
+  const [zoom, setZoom] = useState(1)
+  const [panX, setPanX] = useState(0)
+  const [panY, setPanY] = useState(0)
+  const [saving, setSaving] = useState(false)
+  function cropImage() {
+    setSaving(true)
+    const image = new Image()
+    image.onload = () => {
+      const sourceAspect = image.naturalWidth / image.naturalHeight
+      const baseWidth = sourceAspect > aspect ? image.naturalHeight * aspect : image.naturalWidth
+      const baseHeight = sourceAspect > aspect ? image.naturalHeight : image.naturalWidth / aspect
+      const cropWidth = baseWidth / zoom
+      const cropHeight = baseHeight / zoom
+      const centerX = image.naturalWidth / 2 + (panX / 100) * ((image.naturalWidth - cropWidth) / 2)
+      const centerY = image.naturalHeight / 2 + (panY / 100) * ((image.naturalHeight - cropHeight) / 2)
+      const canvas = document.createElement('canvas')
+      canvas.width = aspect === 1 ? 900 : 1200
+      canvas.height = Math.round(canvas.width / aspect)
+      canvas.getContext('2d')?.drawImage(image, centerX - cropWidth / 2, centerY - cropHeight / 2, cropWidth, cropHeight, 0, 0, canvas.width, canvas.height)
+      onDone(canvas.toDataURL('image/jpeg', .9))
+      setSaving(false)
+    }
+    image.onerror = () => setSaving(false)
+    image.src = source
+  }
+  return <Modal onClose={onCancel} className="crop-modal"><div className="modal-head"><div><p className="eyebrow">Подготовка фотографии</p><h2>Обрезать фото</h2></div><button className="icon-button" onClick={onCancel}><X /></button></div><div className="crop-body"><div className="crop-frame" style={{ aspectRatio: String(aspect) }}><img src={source} alt="Область кадрирования" style={{ transform: `scale(${zoom})`, objectPosition: `${50 + panX / 2}% ${50 + panY / 2}%` }} /><span className="crop-guides" /></div><label><span><ZoomIn size={16} />Масштаб</span><input type="range" min="1" max="3" step="0.05" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} /></label><div className="crop-position"><label><span>По горизонтали</span><input type="range" min="-100" max="100" value={panX} onChange={(event) => setPanX(Number(event.target.value))} /></label><label><span>По вертикали</span><input type="range" min="-100" max="100" value={panY} onChange={(event) => setPanY(Number(event.target.value))} /></label></div><div className="crop-actions"><button className="secondary-button" onClick={onCancel}>Отмена</button><button className="primary-button" onClick={cropImage} disabled={saving}><Crop size={17} />{saving ? 'Готовим…' : 'Обрезать и сохранить'}</button></div></div></Modal>
 }
 
 function App() {
   const [role, setRoleState] = useState<Role | null>(() => isDemoMode ? localStorage.getItem('our-wishes-role') as Role | null : null)
-  const [data, setData] = useState<AppData>(() => isDemoMode ? loadDemoData() : { wishes: [], comments: [], messages: [], events: [] })
+  const [data, setData] = useState<AppData>(() => isDemoMode ? loadDemoData() : emptyData())
   const [cloudProfile, setCloudProfile] = useState<CloudProfile | null>(null)
   const [cloudState, setCloudState] = useState<'checking' | 'welcome' | 'auth' | 'joining' | 'ready'>(() => isDemoMode ? 'ready' : 'checking')
   const [pendingRole, setPendingRole] = useState<Role>('wife')
@@ -103,7 +133,7 @@ function App() {
     }
     if (!next) {
       await signOutCloud()
-      setRoleState(null); setCloudProfile(null); setCloudState('welcome'); setData({ wishes: [], comments: [], messages: [], events: [] })
+      setRoleState(null); setCloudProfile(null); setCloudState('welcome'); setData(emptyData())
       return
     }
     try {
@@ -161,6 +191,7 @@ function App() {
       try {
         const saved = await updateCloudProfile(cloudProfile, name, avatar, imageChanged)
         setCloudProfile((current) => current ? { ...current, ...saved } : current)
+        setData((current) => ({ ...current, members: { ...current.members, [role]: saved } }))
         setToast('Профиль обновлён')
       } catch {
         setCloudProfile(previous)
@@ -298,6 +329,7 @@ function App() {
   const completedCount = data.wishes.filter((wish) => wish.completedAt).length
   const newWishCount = role === 'husband' ? data.wishes.filter((wish) => wish.isNewForHusband && !wish.completedAt).length : 0
   const currentProfile = cloudProfile ? { displayName: cloudProfile.displayName || defaultProfiles[role].displayName, avatar: cloudProfile.avatar } : demoProfiles[role]
+  const chatMembers: Record<Role, MemberProfile> = { ...(isDemoMode ? demoProfiles : data.members), [role]: currentProfile }
 
   return (
     <div className="app-shell">
@@ -318,7 +350,7 @@ function App() {
         {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={openWish} />}
         {activeTab === 'calendar' && <CalendarView events={data.events} wishes={data.wishes} role={role} onAdd={addEvent} onUpdate={editEvent} onDelete={deleteEvent} onOpenWish={openWish} />}
         {activeTab === 'done' && <DoneView wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={openWish} />}
-        {activeTab === 'chat' && <ChatView role={role} messages={data.messages} onSend={addMessage} onLike={toggleMessageLike} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
+        {activeTab === 'chat' && <ChatView role={role} members={chatMembers} messages={data.messages} onSend={addMessage} onLike={toggleMessageLike} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
         {activeTab === 'settings' && <SettingsView role={role} profile={cloudProfile} profileView={currentProfile} onUpdateProfile={saveProfile} onProtect={protectAccount} onSwitch={() => setRole(null)} onToast={setToast} />}
       </main>
 
@@ -518,7 +550,7 @@ function WishCard({ wish, role, onOpen, onPatch }: { wish: Wish; role: Role; onO
   return (
     <article className={`wish-card ${role === 'husband' && wish.isNewForHusband ? 'new-wish' : ''}`} onClick={onOpen}>
       <div className="wish-image-wrap">
-        {wish.image ? <img src={wish.image} alt="" loading="lazy" /> : <div className="image-placeholder"><Gift size={34} /></div>}
+        {wish.image ? <img src={wish.image} alt="" loading="lazy" decoding="async" /> : <div className="image-placeholder"><Gift size={34} /></div>}
         {category && <span className="category-pill">{category.label}</span>}
         {role === 'husband' && wish.isNewForHusband && <span className="new-wish-badge">Новое</span>}
         {role === 'husband' && (
@@ -550,20 +582,22 @@ function MoodboardView({ wishes, onOpen }: { wishes: Wish[]; onOpen: (id: string
         <button onClick={() => setShuffled([...shuffled].sort(() => Math.random() - .5))}><Shuffle size={17} />Перемешать</button>
       </div>
       <div className="masonry">
-        {visible.map((wish, index) => <button key={wish.id} className={`masonry-item tone-${index % 4}`} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt={wish.title} loading="lazy" /> : <Gift size={34} />}<span><small>{categories.find((c) => c.id === wish.categories[0])?.label}</small><strong>{wish.title}</strong></span></button>)}
+        {visible.map((wish, index) => <button key={wish.id} className={`masonry-item tone-${index % 4}`} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt={wish.title} loading="lazy" decoding="async" /> : <Gift size={34} />}<span><small>{categories.find((c) => c.id === wish.categories[0])?.label}</small><strong>{wish.title}</strong></span></button>)}
       </div>
     </div>
   )
 }
 
 function DoneView({ wishes, onOpen }: { wishes: Wish[]; onOpen: (id: string) => void }) {
-  return <div className="page"><section className="hero-row"><div><p className="eyebrow">Ваша история</p><h1>Исполненные мечты</h1></div><div className="wish-count complete"><strong>{wishes.length}</strong><span>сбылось</span></div></section>{wishes.length ? <div className="completed-list">{wishes.map((wish) => <button key={wish.id} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt="" /> : <div className="thumb-placeholder"><Gift /></div>}<span><small>Исполнено {formatShortDate(wish.completedAt!)}</small><strong>{wish.title}</strong><em>{wish.completionNote || 'Ещё одна мечта стала реальностью'}</em></span><CheckCircle2 /></button>)}</div> : <EmptyState icon={<CheckCircle2 />} title="Здесь появится ваша история" text="Когда желание исполнится, оно останется здесь тёплым воспоминанием." />}</div>
+  return <div className="page"><section className="hero-row"><div><p className="eyebrow">Ваша история</p><h1>Исполненные мечты</h1></div><div className="wish-count complete"><strong>{wishes.length}</strong><span>сбылось</span></div></section>{wishes.length ? <div className="completed-list">{wishes.map((wish) => <button key={wish.id} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt="" loading="lazy" decoding="async" /> : <div className="thumb-placeholder"><Gift /></div>}<span><small>Исполнено {formatShortDate(wish.completedAt!)}</small><strong>{wish.title}</strong><em>{wish.completionNote || 'Ещё одна мечта стала реальностью'}</em></span><CheckCircle2 /></button>)}</div> : <EmptyState icon={<CheckCircle2 />} title="Здесь появится ваша история" text="Когда желание исполнится, оно останется здесь тёплым воспоминанием." />}</div>
 }
 
-function ChatView({ role, messages, onSend, onLike, onRead }: { role: Role; messages: ChatMessage[]; onSend: (message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) => void; onLike: (id: string) => void; onRead: () => void }) {
+function ChatView({ role, members, messages, onSend, onLike, onRead }: { role: Role; members: Record<Role, MemberProfile>; messages: ChatMessage[]; onSend: (message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) => void; onLike: (id: string) => void; onRead: () => void }) {
   const [text, setText] = useState('')
+  const [cropSource, setCropSource] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const partnerRole: Role = role === 'wife' ? 'husband' : 'wife'
   useEffect(() => { onRead(); bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function send(event?: FormEvent) {
@@ -574,29 +608,30 @@ function ChatView({ role, messages, onSend, onLike, onRead }: { role: Role; mess
   }
   async function attach(file?: File) {
     if (!file) return
-    onSend({ author: role, image: await fileToDataUrl(file) })
+    setCropSource(await fileToDataUrl(file))
   }
   return (
     <div className="chat-page">
-      <div className="chat-head"><div className="couple-avatars"><span>{role === 'wife' ? 'С' : 'А'}</span><span>{role === 'wife' ? 'А' : 'С'}</span></div><div><h1>Только мы</h1><p><i /> ваш личный чат</p></div><button><MoreHorizontal /></button></div>
+      <div className="chat-head"><div className="couple-avatars"><UserAvatar {...members[partnerRole]} /><UserAvatar {...members[role]} /></div><div><h1>Только мы</h1><p><i /> {members.wife.displayName} и {members.husband.displayName}</p></div><button><MoreHorizontal /></button></div>
       <div className="messages">
         <div className="chat-date">Сегодня</div>
         {messages.map((message, index) => {
           const own = message.author === role
           const showAvatar = !own && messages[index + 1]?.author !== message.author
           return <div key={message.id} className={`message-row ${own ? 'own' : ''}`}>
-            {!own && <span className={`message-avatar ${showAvatar ? '' : 'hidden'}`}>{message.author === 'wife' ? 'А' : 'С'}</span>}
-            <div className="message-wrap"><div className="message-bubble">{message.image && <img src={message.image} alt="Отправленное фото" />}{message.text && <p>{message.text}</p>}<time>{new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(message.createdAt))}{own && <Check size={12} />}</time></div><button className={`message-like ${message.likedByMe ? 'liked' : ''}`} aria-label="Лайкнуть сообщение" onClick={() => onLike(message.id)}><Heart size={13} fill={message.likedByMe ? 'currentColor' : 'none'} />{Boolean(message.likeCount) && <span>{message.likeCount}</span>}</button></div>
+            {!own && <UserAvatar {...members[message.author]} className={`message-avatar ${showAvatar ? '' : 'hidden'}`} />}
+            <div className="message-wrap"><div className="message-bubble">{message.image && <img src={message.image} alt="Отправленное фото" loading="lazy" decoding="async" />}{message.text && <p>{message.text}</p>}<time>{new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(message.createdAt))}{own && <Check size={12} />}</time></div><button className={`message-like ${message.likedByMe ? 'liked' : ''}`} aria-label="Лайкнуть сообщение" onClick={() => onLike(message.id)}><Heart size={13} fill={message.likedByMe ? 'currentColor' : 'none'} />{Boolean(message.likeCount) && <span>{message.likeCount}</span>}</button></div>
           </div>
         })}
         <div ref={bottomRef} />
       </div>
       <form className="chat-composer" onSubmit={send}>
         <button type="button" onClick={() => fileRef.current?.click()}><Paperclip size={21} /></button>
-        <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => attach(e.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { void attach(e.target.files?.[0]); e.currentTarget.value = '' }} />
         <div className="composer-input"><input value={text} onChange={(e) => setText(e.target.value)} placeholder="Написать сообщение…" /><button type="button" onClick={() => setText((value) => `${value} 🤍`)}>☺</button></div>
         <button className="send-button" type="submit" disabled={!text.trim()}><Send size={19} /></button>
       </form>
+      {cropSource && <ImageCropper source={cropSource} aspect={4 / 3} onCancel={() => setCropSource(null)} onDone={(image) => { onSend({ author: role, image }); setCropSource(null) }} />}
     </div>
   )
 }
@@ -611,10 +646,11 @@ function SettingsView({ role, profile, profileView, onUpdateProfile, onProtect, 
   const [editingProfile, setEditingProfile] = useState(false)
   const [profileName, setProfileName] = useState(profileView.displayName)
   const [profileAvatar, setProfileAvatar] = useState(profileView.avatar)
+  const [avatarCropSource, setAvatarCropSource] = useState<string | null>(null)
   const [profileSaving, setProfileSaving] = useState(false)
   const avatarGalleryId = useId()
   const avatarCameraId = useId()
-  async function chooseAvatar(file?: File) { if (file) setProfileAvatar(await fileToDataUrl(file)) }
+  async function chooseAvatar(file?: File) { if (file) setAvatarCropSource(await fileToDataUrl(file)) }
   async function askNotifications() {
     if (typeof Notification === 'undefined' || !profile) { setNotificationStatus('unsupported'); onToast('Установите приложение на главный экран'); return }
     try {
@@ -632,10 +668,11 @@ function SettingsView({ role, profile, profileView, onUpdateProfile, onProtect, 
       <section className="hero-row"><div><p className="eyebrow">Ваше пространство</p><h1>Настройки</h1></div></section>
       <div className="profile-card"><UserAvatar {...profileView} className="profile-avatar" /><div><h2>{profileView.displayName}</h2><p>{role === 'wife' ? 'Добавляет мечты' : 'Исполняет мечты'}</p></div><button className="profile-edit" onClick={() => { setProfileName(profileView.displayName); setProfileAvatar(profileView.avatar); setEditingProfile((value) => !value) }}><Pencil size={15} />{editingProfile ? 'Закрыть' : 'Изменить'}</button></div>
       {editingProfile && <form className="profile-editor" onSubmit={async (event) => { event.preventDefault(); if (!profileName.trim()) return; setProfileSaving(true); await onUpdateProfile(profileName, profileAvatar); setProfileSaving(false); setEditingProfile(false) }}>
-        <div className="profile-photo-edit"><UserAvatar displayName={profileName || profileView.displayName} avatar={profileAvatar} className="profile-avatar large" /><div><strong>Фото профиля</strong><span>Можно выбрать из галереи или снять новое</span><div className="profile-photo-actions"><label htmlFor={avatarGalleryId}><ImageIcon size={15} />Галерея</label><label htmlFor={avatarCameraId}><Camera size={15} />Камера</label>{profileAvatar && <button type="button" onClick={() => setProfileAvatar(undefined)}>Убрать</button>}</div></div><input id={avatarGalleryId} className="file-input" type="file" accept="image/*" onChange={(event) => void chooseAvatar(event.target.files?.[0])} /><input id={avatarCameraId} className="file-input" type="file" accept="image/*" capture="environment" onChange={(event) => void chooseAvatar(event.target.files?.[0])} /></div>
+        <div className="profile-photo-edit"><UserAvatar displayName={profileName || profileView.displayName} avatar={profileAvatar} className="profile-avatar large" /><div><strong>Фото профиля</strong><span>Можно выбрать из галереи или снять новое</span><div className="profile-photo-actions"><label htmlFor={avatarGalleryId}><ImageIcon size={15} />Галерея</label><label htmlFor={avatarCameraId}><Camera size={15} />Камера</label>{profileAvatar && <button type="button" onClick={() => setProfileAvatar(undefined)}>Убрать</button>}</div></div><input id={avatarGalleryId} className="file-input" type="file" accept="image/*" onChange={(event) => { void chooseAvatar(event.target.files?.[0]); event.currentTarget.value = '' }} /><input id={avatarCameraId} className="file-input" type="file" accept="image/*" capture="environment" onChange={(event) => { void chooseAvatar(event.target.files?.[0]); event.currentTarget.value = '' }} /></div>
         <label className="field"><span>Имя</span><input value={profileName} maxLength={80} onChange={(event) => setProfileName(event.target.value)} placeholder={role === 'wife' ? 'Алла' : 'Стас'} /></label>
         <button className="primary-button wide" disabled={!profileName.trim() || profileSaving}>{profileSaving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{profileSaving ? 'Сохраняем…' : 'Сохранить профиль'}</button>
       </form>}
+      {avatarCropSource && <ImageCropper source={avatarCropSource} aspect={1} onCancel={() => setAvatarCropSource(null)} onDone={(image) => { setProfileAvatar(image); setAvatarCropSource(null) }} />}
       <div className="settings-group"><h3>Приложение</h3>
         <button onClick={askNotifications} disabled={notificationLoading}><span className="setting-icon"><BellRing /></span><span><strong>Пуш-уведомления</strong><small>{notificationStatus === 'granted' ? 'Новые желания и сообщения' : notificationStatus === 'denied' ? 'Запрещены в настройках телефона' : notificationStatus === 'unsupported' ? 'Установите приложение на экран Домой' : 'Включить на этом телефоне'}</small></span><em>{notificationLoading ? '…' : notificationStatus === 'granted' ? 'Вкл.' : 'Настроить'}</em></button>
         <button onClick={() => setInstalled(true)}><span className="setting-icon"><Upload /></span><span><strong>Установить приложение</strong><small>{installed ? 'Открывается как приложение' : 'Добавьте на домашний экран'}</small></span><em>{installed ? 'Готово' : 'Как?'}</em></button>
@@ -665,6 +702,7 @@ function AddWishModal({ wish, onClose, onAdd }: { wish?: Wish; onClose: () => vo
   const [stars, setStars] = useState<1 | 2 | 3 | 4 | 5>(wish?.stars || 5)
   const [selectedCategories, setSelectedCategories] = useState<CategoryId[]>(wish?.categories || ['everyday'])
   const [image, setImage] = useState<string | undefined>(wish?.image)
+  const [cropSource, setCropSource] = useState<string | null>(null)
   const [details, setDetails] = useState(wish?.details || '')
   const [targetDate, setTargetDate] = useState(wish?.targetDate || '')
   const galleryId = useId()
@@ -684,7 +722,7 @@ function AddWishModal({ wish, onClose, onAdd }: { wish?: Wish; onClose: () => vo
       setMode('manual')
     } finally { setLoadingLink(false) }
   }
-  async function chooseImage(file?: File) { if (file) setImage(await fileToDataUrl(file)) }
+  async function chooseImage(file?: File) { if (file) setCropSource(await fileToDataUrl(file)) }
   function toggleCategory(id: CategoryId) { setSelectedCategories((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]) }
   function submit(event: FormEvent) {
     event.preventDefault()
@@ -720,6 +758,7 @@ function AddWishModal({ wish, onClose, onAdd }: { wish?: Wish; onClose: () => vo
           <div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Отмена</button><button className="primary-button" type="submit"><Heart size={18} />{wish ? 'Сохранить' : 'Добавить желание'}</button></div>
         </form>
       )}
+      {cropSource && <ImageCropper source={cropSource} aspect={4 / 3} onCancel={() => setCropSource(null)} onDone={(value) => { setImage(value); setCropSource(null) }} />}
     </Modal>
   )
 }
