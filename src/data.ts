@@ -81,4 +81,8 @@ export const seedData: AppData = {
     { id: 'm2', author: 'husband', text: 'Уже посмотрел. Кажется, одна мне особенно нравится', createdAt: '2026-10-02T17:15:00.000Z', read: true },
     { id: 'm3', author: 'wife', text: 'Интрига? 😊', createdAt: '2026-10-02T17:16:00.000Z', read: false },
   ],
+  events: [
+    { id: 'e1', title: 'Годовщина свадьбы', date: '2026-10-18', time: '19:00', emojis: ['💍', '🥂'], author: 'wife', createdAt: '2026-09-20T10:00:00.000Z' },
+    { id: 'e2', title: 'День рождения дочки', date: '2026-11-06', emojis: ['👧', '🎂', '🎁'], author: 'husband', createdAt: '2026-09-22T10:00:00.000Z' },
+  ],
 }

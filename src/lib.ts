@@ -12,7 +12,9 @@ const STORAGE_KEY = 'our-wishes-demo-v2'
 export function loadDemoData(): AppData {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
-    return stored ? JSON.parse(stored) as AppData : structuredClone(seedData)
+    if (!stored) return structuredClone(seedData)
+    const parsed = JSON.parse(stored) as AppData
+    return { ...parsed, events: parsed.events || [] }
   } catch {
     return structuredClone(seedData)
   }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  Bell, BellRing, Building2, Camera, Car, Check, CheckCircle2, ChevronLeft,
+  Bell, BellRing, Building2, CalendarDays, Camera, Car, Check, CheckCircle2, ChevronLeft,
   CircleUserRound, Compass, ExternalLink, Filter, Flower2, Gem, Gift, Heart,
   HeartHandshake, House, Image as ImageIcon, Link2, LoaderCircle, MapPin,
   LayoutGrid, MessageCircle, MoreHorizontal, Paperclip, Plane, Plus, RectangleHorizontal, Search, Send,
@@ -9,13 +9,14 @@ import {
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { categories } from './data'
+import { CalendarView } from './CalendarView'
 import { fileToDataUrl, formatPrice, formatShortDate, importFromLink, isDemoMode, loadDemoData, saveDemoData, supabase, uid } from './lib'
 import {
-  authenticateCloud, createCloudCouple, fetchCloudData, insertCloudComment, insertCloudMessage, insertCloudWish,
-  joinCloudCouple, linkCloudAccount, restoreProfile, setCloudCompleted, setCloudLike, setCloudReservation,
+  authenticateCloud, createCloudCouple, deleteCloudEvent, fetchCloudData, insertCloudComment, insertCloudEvent, insertCloudMessage, insertCloudWish,
+  joinCloudCouple, linkCloudAccount, restoreProfile, setCloudCompleted, setCloudLike, setCloudMessageLike, setCloudReservation,
   signOutCloud, subscribeToCloud, type AuthMode, type CloudProfile,
 } from './cloud'
-import type { AppData, CategoryId, ChatMessage, Role, Tab, Wish } from './types'
+import type { AppData, CalendarEvent, CategoryId, ChatMessage, Role, Tab, Wish } from './types'
 
 const iconMap: Record<string, LucideIcon> = {
   Gift, HeartHandshake, TreePine, Flower2, MapPin, Plane, Car, House, Building2, Gem,
@@ -24,16 +25,16 @@ const iconMap: Record<string, LucideIcon> = {
 const navItems: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'wishes', label: 'Желания', icon: Heart },
   { id: 'moodboard', label: 'Карта', icon: Sparkles },
-  { id: 'done', label: 'Исполнено', icon: CheckCircle2 },
+  { id: 'calendar', label: 'Календарь', icon: CalendarDays },
   { id: 'chat', label: 'Чат', icon: MessageCircle },
-  { id: 'settings', label: 'Настройки', icon: Settings },
+  { id: 'done', label: 'Сбылось', icon: CheckCircle2 },
 ]
 
 type Sort = 'new' | 'stars' | 'cheap' | 'expensive'
 
 function App() {
   const [role, setRoleState] = useState<Role | null>(() => isDemoMode ? localStorage.getItem('our-wishes-role') as Role | null : null)
-  const [data, setData] = useState<AppData>(() => isDemoMode ? loadDemoData() : { wishes: [], comments: [], messages: [] })
+  const [data, setData] = useState<AppData>(() => isDemoMode ? loadDemoData() : { wishes: [], comments: [], messages: [], events: [] })
   const [cloudProfile, setCloudProfile] = useState<CloudProfile | null>(null)
   const [cloudState, setCloudState] = useState<'checking' | 'welcome' | 'auth' | 'joining' | 'ready'>(() => isDemoMode ? 'ready' : 'checking')
   const [pendingRole, setPendingRole] = useState<Role>('wife')
@@ -74,7 +75,7 @@ function App() {
     }
     if (!next) {
       await signOutCloud()
-      setRoleState(null); setCloudProfile(null); setCloudState('welcome'); setData({ wishes: [], comments: [], messages: [] })
+      setRoleState(null); setCloudProfile(null); setCloudState('welcome'); setData({ wishes: [], comments: [], messages: [], events: [] })
       return
     }
     try {
@@ -168,7 +169,29 @@ function App() {
   function addMessage(message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) {
     const next: ChatMessage = { ...message, id: uid('message'), createdAt: new Date().toISOString(), read: false }
     setData((current) => ({ ...current, messages: [...current.messages, next] }))
-    if (cloudProfile) insertCloudMessage(next, cloudProfile).catch(() => setToast('Сообщение не отправлено. Проверьте интернет.'))
+    if (cloudProfile) insertCloudMessage(next, cloudProfile).catch(() => {
+      setData((current) => ({ ...current, messages: current.messages.filter((item) => item.id !== next.id) }))
+      setToast('Сообщение не отправлено. Проверьте интернет.')
+    })
+  }
+
+  function toggleMessageLike(id: string) {
+    const message = data.messages.find((item) => item.id === id)
+    if (!message) return
+    const liked = !message.likedByMe
+    setData((current) => ({ ...current, messages: current.messages.map((item) => item.id === id ? { ...item, likedByMe: liked, likeCount: Math.max(0, (item.likeCount || 0) + (liked ? 1 : -1)) } : item) }))
+    if (cloudProfile) setCloudMessageLike(id, liked, cloudProfile).catch(() => { setToast('Не удалось поставить лайк'); fetchCloudData(cloudProfile).then(setData) })
+  }
+
+  function addEvent(event: CalendarEvent) {
+    setData((current) => ({ ...current, events: [...current.events, event] }))
+    setToast('Событие добавлено в календарь')
+    if (cloudProfile) insertCloudEvent(event, cloudProfile).catch(() => { setData((current) => ({ ...current, events: current.events.filter((item) => item.id !== event.id) })); setToast('Не удалось сохранить событие') })
+  }
+
+  function deleteEvent(id: string) {
+    setData((current) => ({ ...current, events: current.events.filter((item) => item.id !== id) }))
+    if (cloudProfile) deleteCloudEvent(id).catch(() => { setToast('Не удалось удалить событие'); fetchCloudData(cloudProfile).then(setData) })
   }
 
   if (!isDemoMode && cloudState === 'checking') return <CloudLoading />
@@ -197,8 +220,9 @@ function App() {
       <main className="main-content">
         {activeTab === 'wishes' && <WishesView data={data} role={role} onOpen={setSelectedWishId} onAdd={() => setShowAdd(true)} onPatch={patchWish} />}
         {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={setSelectedWishId} />}
+        {activeTab === 'calendar' && <CalendarView events={data.events} role={role} onAdd={addEvent} onDelete={deleteEvent} />}
         {activeTab === 'done' && <DoneView wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={setSelectedWishId} />}
-        {activeTab === 'chat' && <ChatView role={role} messages={data.messages} onSend={addMessage} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
+        {activeTab === 'chat' && <ChatView role={role} messages={data.messages} onSend={addMessage} onLike={toggleMessageLike} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
         {activeTab === 'settings' && <SettingsView role={role} profile={cloudProfile} onProtect={protectAccount} onSwitch={() => setRole(null)} />}
       </main>
 
@@ -214,7 +238,7 @@ function App() {
         })}
       </nav>
 
-      {role === 'wife' && activeTab !== 'chat' && activeTab !== 'settings' && (
+      {role === 'wife' && ['wishes', 'moodboard', 'done'].includes(activeTab) && (
         <button className="floating-add" aria-label="Добавить желание" onClick={() => setShowAdd(true)}><Plus size={22} /><span>Добавить</span></button>
       )}
 
@@ -407,7 +431,7 @@ function WishCard({ wish, role, onOpen, onPatch }: { wish: Wish; role: Role; onO
       <div className="wish-card-body">
         <div className="stars" aria-label={`${wish.stars} из 5`}>{[1,2,3,4,5].map((n) => <Star key={n} size={12} fill={n <= wish.stars ? 'currentColor' : 'none'} />)}</div>
         <h3>{wish.title}</h3>
-        <div className="card-meta"><strong>{formatPrice(wish.price)}</strong><span>{formatShortDate(wish.createdAt)}</span></div>
+        <div className="card-meta"><strong>{formatPrice(wish.price)}</strong><span className={wish.targetDate ? 'target-date' : ''}>{wish.targetDate ? `До ${formatTargetDate(wish.targetDate)}` : formatShortDate(wish.createdAt)}</span></div>
       </div>
     </article>
   )
@@ -436,7 +460,7 @@ function DoneView({ wishes, onOpen }: { wishes: Wish[]; onOpen: (id: string) => 
   return <div className="page"><section className="hero-row"><div><p className="eyebrow">Ваша история</p><h1>Исполненные мечты</h1></div><div className="wish-count complete"><strong>{wishes.length}</strong><span>сбылось</span></div></section>{wishes.length ? <div className="completed-list">{wishes.map((wish) => <button key={wish.id} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt="" /> : <div className="thumb-placeholder"><Gift /></div>}<span><small>Исполнено {formatShortDate(wish.completedAt!)}</small><strong>{wish.title}</strong><em>{wish.completionNote || 'Ещё одна мечта стала реальностью'}</em></span><CheckCircle2 /></button>)}</div> : <EmptyState icon={<CheckCircle2 />} title="Здесь появится ваша история" text="Когда желание исполнится, оно останется здесь тёплым воспоминанием." />}</div>
 }
 
-function ChatView({ role, messages, onSend, onRead }: { role: Role; messages: ChatMessage[]; onSend: (message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) => void; onRead: () => void }) {
+function ChatView({ role, messages, onSend, onLike, onRead }: { role: Role; messages: ChatMessage[]; onSend: (message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) => void; onLike: (id: string) => void; onRead: () => void }) {
   const [text, setText] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -462,7 +486,7 @@ function ChatView({ role, messages, onSend, onRead }: { role: Role; messages: Ch
           const showAvatar = !own && messages[index + 1]?.author !== message.author
           return <div key={message.id} className={`message-row ${own ? 'own' : ''}`}>
             {!own && <span className={`message-avatar ${showAvatar ? '' : 'hidden'}`}>{message.author === 'wife' ? 'А' : 'С'}</span>}
-            <div className="message-bubble">{message.image && <img src={message.image} alt="Отправленное фото" />}{message.text && <p>{message.text}</p>}<time>{new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(message.createdAt))}{own && <Check size={12} />}</time></div>
+            <div className="message-wrap"><div className="message-bubble">{message.image && <img src={message.image} alt="Отправленное фото" />}{message.text && <p>{message.text}</p>}<time>{new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(message.createdAt))}{own && <Check size={12} />}</time></div><button className={`message-like ${message.likedByMe ? 'liked' : ''}`} aria-label="Лайкнуть сообщение" onClick={() => onLike(message.id)}><Heart size={13} fill={message.likedByMe ? 'currentColor' : 'none'} />{Boolean(message.likeCount) && <span>{message.likeCount}</span>}</button></div>
           </div>
         })}
         <div ref={bottomRef} />
@@ -510,7 +534,7 @@ function SettingsView({ role, profile, onProtect, onSwitch }: { role: Role; prof
 }
 
 function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: Wish) => void }) {
-  const [mode, setMode] = useState<'link' | 'manual'>('link')
+  const [mode, setMode] = useState<'link' | 'manual'>('manual')
   const [link, setLink] = useState('')
   const [loadingLink, setLoadingLink] = useState(false)
   const [error, setError] = useState('')
@@ -521,7 +545,9 @@ function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: W
   const [selectedCategories, setSelectedCategories] = useState<CategoryId[]>(['everyday'])
   const [image, setImage] = useState<string>()
   const [details, setDetails] = useState('')
-  const fileRef = useRef<HTMLInputElement>(null)
+  const [targetDate, setTargetDate] = useState('')
+  const galleryRef = useRef<HTMLInputElement>(null)
+  const cameraRef = useRef<HTMLInputElement>(null)
 
   async function importLink() {
     try {
@@ -542,13 +568,13 @@ function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: W
   function submit(event: FormEvent) {
     event.preventDefault()
     if (!title.trim()) { setError('Добавьте название желания'); return }
-    onAdd({ id: uid('wish'), title: title.trim(), description: description.trim(), link: link.trim() || undefined, price: price ? Number(price) : undefined, image, images: image ? [image] : [], categories: selectedCategories.length ? selectedCategories : ['everyday'], stars, details: details.trim() || undefined, createdAt: new Date().toISOString() })
+    onAdd({ id: uid('wish'), title: title.trim(), description: description.trim(), link: link.trim() || undefined, price: price ? Number(price) : undefined, image, images: image ? [image] : [], categories: selectedCategories.length ? selectedCategories : ['everyday'], stars, details: details.trim() || undefined, targetDate: targetDate || undefined, createdAt: new Date().toISOString() })
   }
 
   return (
     <Modal onClose={onClose} className="add-modal">
       <div className="modal-head"><div><p className="eyebrow">Новая мечта</p><h2>Добавить желание</h2></div><button className="icon-button" onClick={onClose}><X /></button></div>
-      <div className="mode-switch"><button className={mode === 'link' ? 'active' : ''} onClick={() => setMode('link')}><Link2 size={18} />По ссылке</button><button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Sparkles size={18} />Вручную</button></div>
+      <div className="mode-switch"><button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Sparkles size={18} />Вручную</button><button className={mode === 'link' ? 'active' : ''} onClick={() => setMode('link')}><Link2 size={18} />По ссылке</button></div>
       {mode === 'link' ? (
         <div className="link-import">
           <div className="import-illustration"><Link2 size={34} /><span><Sparkles size={14} /></span></div>
@@ -560,12 +586,13 @@ function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: W
         </div>
       ) : (
         <form className="wish-form" onSubmit={submit}>
-          {link && <div className="imported-link"><Link2 size={16} /><span>{new URL(link).hostname}</span><button type="button" onClick={() => setLink('')}><X size={15} /></button></div>}
-          <div className="photo-picker" onClick={() => fileRef.current?.click()}>{image ? <><img src={image} alt="Выбранная обложка" /><button type="button" onClick={(e) => { e.stopPropagation(); setImage(undefined) }}><X size={16} /></button></> : <><div><Camera size={25} /></div><strong>Добавить фотографию</strong><span>из галереи или камеры</span></>}<input ref={fileRef} type="file" hidden accept="image/*" capture="environment" onChange={(e) => chooseImage(e.target.files?.[0])} /></div>
+          {link && <div className="imported-link"><Link2 size={16} /><span>{safeHost(link)}</span><button type="button" onClick={() => setLink('')}><X size={15} /></button></div>}
+          <div className="photo-picker">{image ? <><img src={image} alt="Выбранная обложка" /><button type="button" className="remove-photo" onClick={() => setImage(undefined)}><X size={16} /></button></> : <><div><Camera size={25} /></div><strong>Добавить фотографию</strong><span>выберите удобный способ</span></>}<div className="photo-actions"><button type="button" onClick={() => galleryRef.current?.click()}><ImageIcon size={17} />Галерея</button><button type="button" onClick={() => cameraRef.current?.click()}><Camera size={17} />Камера</button></div><input ref={galleryRef} type="file" hidden accept="image/*" onChange={(e) => { void chooseImage(e.target.files?.[0]); e.currentTarget.value = '' }} /><input ref={cameraRef} type="file" hidden accept="image/*" capture="environment" onChange={(e) => { void chooseImage(e.target.files?.[0]); e.currentTarget.value = '' }} /></div>
           <label className="field"><span>Название *</span><input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="О чём мечтаешь?" /></label>
           <label className="field"><span>Описание</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Расскажи подробнее…" rows={3} /></label>
           {!link && <label className="field"><span>Ссылка</span><div className="input-with-icon"><Link2 size={18} /><input type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…" /></div></label>}
-          <div className="form-two"><label className="field"><span>Стоимость, ₽</span><input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="Необязательно" /></label><label className="field"><span>Насколько хочется</span><div className="form-stars">{[1,2,3,4,5].map((n) => <button type="button" key={n} onClick={() => setStars(n as 1|2|3|4|5)}><Star size={22} fill={n <= stars ? 'currentColor' : 'none'} /></button>)}</div></label></div>
+          <div className="form-two"><label className="field"><span>Стоимость, ₽</span><input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="Необязательно" /></label><label className="field"><span>Когда хочется исполнить</span><input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} /></label></div>
+          <label className="field"><span>Насколько хочется</span><div className="form-stars">{[1,2,3,4,5].map((n) => <button type="button" key={n} onClick={() => setStars(n as 1|2|3|4|5)}><Star size={22} fill={n <= stars ? 'currentColor' : 'none'} /></button>)}</div></label>
           <fieldset><legend>Разделы</legend><div className="category-options">{categories.map((item) => { const Icon = iconMap[item.icon]; return <button type="button" key={item.id} className={selectedCategories.includes(item.id) ? 'active' : ''} onClick={() => toggleCategory(item.id)}><Icon size={17} />{item.label}{selectedCategories.includes(item.id) && <Check size={14} />}</button> })}</div></fieldset>
           <label className="field"><span>Размер, цвет и другие детали</span><textarea value={details} onChange={(e) => setDetails(e.target.value)} placeholder="Например: размер M, молочный цвет" rows={2} /></label>
           {error && <p className="form-error">{error}</p>}
@@ -594,12 +621,13 @@ function WishDetail({ wish, role, comments, onClose, onPatch, onComment, onToast
         <div className="detail-labels">{wish.categories.map((id) => <span key={id}>{categories.find((item) => item.id === id)?.label}</span>)}</div>
         <div className="detail-title"><div><h2>{wish.title}</h2><div className="stars">{[1,2,3,4,5].map((n) => <Star key={n} size={14} fill={n <= wish.stars ? 'currentColor' : 'none'} />)}</div></div>{role === 'husband' && !completed && <button className={`big-like ${wish.likedByHusband ? 'liked' : ''}`} onClick={() => onPatch({ likedByHusband: !wish.likedByHusband })}><Heart fill={wish.likedByHusband ? 'currentColor' : 'none'} /></button>}</div>
         <div className="detail-price">{formatPrice(wish.price)}</div>
+        {wish.targetDate && <div className="wish-deadline"><CalendarDays size={18} /><div><strong>Хочется исполнить</strong><span>{formatTargetDate(wish.targetDate)}</span></div></div>}
         {wish.description && <section><h3>Об этом желании</h3><p>{wish.description}</p></section>}
         {wish.details && <div className="detail-note"><Sparkles size={17} /><div><strong>Важные детали</strong><p>{wish.details}</p></div></div>}
         {wish.link && <a className="shop-link" href={wish.link} target="_blank" rel="noreferrer"><Link2 size={18} /><span><strong>Открыть исходную ссылку</strong><small>{safeHost(wish.link)}</small></span><ExternalLink size={17} /></a>}
         {role === 'husband' && !completed && <button className={`reserve-button ${wish.reservedByHusband ? 'selected' : ''}`} onClick={() => { onPatch({ reservedByHusband: !wish.reservedByHusband }); onToast(wish.reservedByHusband ? 'Выбор отменён' : 'Сохранено только для вас') }}>{wish.reservedByHusband ? <><CheckCircle2 />Вы выбрали это желание</> : <><Gift />Хочу исполнить</>}<small>{wish.reservedByHusband ? 'Жена не видит эту отметку' : 'Отметка будет видна только вам'}</small></button>}
-        {!completed && <button className="complete-button" onClick={() => { onPatch({ completedAt: new Date().toISOString() }); onToast('Мечта исполнена 🤍') }}><Check size={18} />Отметить исполненным</button>}
-        {completed && <button className="secondary-button wide" onClick={() => onPatch({ completedAt: undefined })}>Вернуть в актуальные</button>}
+        {role === 'wife' && !completed && <button className="complete-button" onClick={() => { onPatch({ completedAt: new Date().toISOString() }); onToast('Мечта исполнена 🤍') }}><CheckCircle2 size={20} />Отметить исполненным</button>}
+        {role === 'wife' && completed && <button className="secondary-button wide" onClick={() => onPatch({ completedAt: undefined })}>Вернуть в актуальные</button>}
         <section className="comments-section"><div className="section-title"><h3>Комментарии</h3><span>{comments.length}</span></div>
           {comments.map((item) => <div className="comment" key={item.id}><span className="comment-avatar">{item.author === 'wife' ? 'А' : 'С'}</span><div><strong>{item.author === 'wife' ? 'Алла' : 'Стас'}<small>{formatShortDate(item.createdAt)}</small></strong><p>{item.text}</p></div></div>)}
           <form className="comment-form" onSubmit={submitComment}><span className="comment-avatar">{role === 'wife' ? 'А' : 'С'}</span><div><input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Оставить тёплый комментарий…" /><button type="submit" disabled={!comment.trim()}><Send size={17} /></button></div></form>
@@ -619,6 +647,7 @@ function EmptyState({ icon, title, text, action }: { icon: ReactNode; title: str
 }
 
 function safeHost(value: string) { try { return new URL(value).hostname.replace(/^www\./, '') } catch { return value } }
+function formatTargetDate(value: string) { const [year, month, day] = value.split('-').map(Number); return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(year, month - 1, day)) }
 function isValidUrl(value: string) { try { return Boolean(new URL(value).protocol.match(/^https?:$/)) } catch { return false } }
 function plural(value: number, forms: [string,string,string]) { const n = Math.abs(value) % 100; const n1 = n % 10; if (n > 10 && n < 20) return forms[2]; if (n1 > 1 && n1 < 5) return forms[1]; if (n1 === 1) return forms[0]; return forms[2] }
 
