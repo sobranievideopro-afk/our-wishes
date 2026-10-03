@@ -1,10 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
   Bell, BellRing, Building2, CalendarDays, Camera, Car, Check, CheckCircle2, ChevronLeft,
   CircleUserRound, Compass, ExternalLink, Filter, Flower2, Gem, Gift, Heart,
   HeartHandshake, House, Image as ImageIcon, Link2, LoaderCircle, MapPin,
   LayoutGrid, MessageCircle, MoreHorizontal, Paperclip, Plane, Plus, RectangleHorizontal, Search, Send,
-  Settings, Share2, Shuffle, SlidersHorizontal, Sparkles, Star, TreePine,
+  Pencil, Settings, Share2, Shuffle, SlidersHorizontal, Sparkles, Star, Trash2, TreePine,
   Upload, UserRound, X,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -12,9 +12,9 @@ import { categories } from './data'
 import { CalendarView } from './CalendarView'
 import { fileToDataUrl, formatPrice, formatShortDate, importFromLink, isDemoMode, loadDemoData, saveDemoData, supabase, uid } from './lib'
 import {
-  authenticateCloud, createCloudCouple, deleteCloudEvent, fetchCloudData, insertCloudComment, insertCloudEvent, insertCloudMessage, insertCloudWish,
-  joinCloudCouple, linkCloudAccount, restoreProfile, setCloudCompleted, setCloudLike, setCloudMessageLike, setCloudReservation,
-  signOutCloud, subscribeToCloud, type AuthMode, type CloudProfile,
+  authenticateCloud, createCloudCouple, deleteCloudEvent, deleteCloudWish, enableCloudPush, fetchCloudData, insertCloudComment, insertCloudEvent, insertCloudMessage, insertCloudWish,
+  joinCloudCouple, linkCloudAccount, markCloudWishSeen, notifyPartner, restoreProfile, setCloudCompleted, setCloudLike, setCloudMessageLike, setCloudReservation,
+  signOutCloud, subscribeToCloud, updateCloudEvent, updateCloudProfile, updateCloudWish, type AuthMode, type CloudProfile,
 } from './cloud'
 import type { AppData, CalendarEvent, CategoryId, ChatMessage, Role, Tab, Wish } from './types'
 
@@ -32,6 +32,21 @@ const navItems: { id: Tab; label: string; icon: LucideIcon }[] = [
 
 type Sort = 'new' | 'stars' | 'cheap' | 'expensive'
 
+type ProfileView = { displayName: string; avatar?: string }
+const defaultProfiles: Record<Role, ProfileView> = { wife: { displayName: 'Алла' }, husband: { displayName: 'Стас' } }
+
+function loadDemoProfiles(): Record<Role, ProfileView> {
+  try {
+    return { ...defaultProfiles, ...JSON.parse(localStorage.getItem('our-wishes-profiles') || '{}') }
+  } catch { return defaultProfiles }
+}
+
+function initialFor(name: string) { return name.trim().charAt(0).toLocaleUpperCase('ru') || '♡' }
+
+function UserAvatar({ displayName, avatar, className = '' }: ProfileView & { className?: string }) {
+  return <span className={`user-avatar ${className}`}>{avatar ? <img src={avatar} alt="" /> : initialFor(displayName)}</span>
+}
+
 function App() {
   const [role, setRoleState] = useState<Role | null>(() => isDemoMode ? localStorage.getItem('our-wishes-role') as Role | null : null)
   const [data, setData] = useState<AppData>(() => isDemoMode ? loadDemoData() : { wishes: [], comments: [], messages: [], events: [] })
@@ -42,7 +57,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>('wishes')
   const [selectedWishId, setSelectedWishId] = useState<string | null>(null)
   const [showAdd, setShowAdd] = useState(false)
+  const [editingWishId, setEditingWishId] = useState<string | null>(null)
   const [toast, setToast] = useState<string | null>(null)
+  const [demoProfiles, setDemoProfiles] = useState<Record<Role, ProfileView>>(loadDemoProfiles)
 
   useEffect(() => { if (isDemoMode) saveDemoData(data) }, [data])
   useEffect(() => {
@@ -60,6 +77,17 @@ function App() {
     const channel = subscribeToCloud(cloudProfile, refresh)
     return () => { active = false; if (supabase) void supabase.removeChannel(channel) }
   }, [cloudProfile])
+  useEffect(() => {
+    if (!cloudProfile || typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    enableCloudPush(cloudProfile).catch(() => undefined)
+  }, [cloudProfile])
+  useEffect(() => {
+    if (!role) return
+    const params = new URLSearchParams(location.search)
+    const wishId = params.get('wish')
+    if (wishId && data.wishes.some((wish) => wish.id === wishId)) openWish(wishId)
+    if (params.get('tab') === 'chat') setActiveTab('chat')
+  }, [data.wishes.length, role]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!toast) return
     const timer = window.setTimeout(() => setToast(null), 2600)
@@ -123,6 +151,31 @@ function App() {
     }
   }
 
+  async function saveProfile(displayName: string, avatar: string | undefined) {
+    if (!role) return
+    const name = displayName.trim().slice(0, 80) || defaultProfiles[role].displayName
+    if (cloudProfile) {
+      const previous = cloudProfile
+      const imageChanged = avatar !== cloudProfile.avatar
+      setCloudProfile({ ...cloudProfile, displayName: name, avatar })
+      try {
+        const saved = await updateCloudProfile(cloudProfile, name, avatar, imageChanged)
+        setCloudProfile((current) => current ? { ...current, ...saved } : current)
+        setToast('Профиль обновлён')
+      } catch {
+        setCloudProfile(previous)
+        setToast('Не удалось сохранить профиль')
+      }
+      return
+    }
+    setDemoProfiles((current) => {
+      const next = { ...current, [role]: { displayName: name, avatar } }
+      localStorage.setItem('our-wishes-profiles', JSON.stringify(next))
+      return next
+    })
+    setToast('Профиль обновлён')
+  }
+
   async function joinPair(code: string) {
     try {
       setCloudError(''); setCloudState('checking')
@@ -135,14 +188,45 @@ function App() {
   }
 
   async function addWish(wish: Wish) {
-    setData((current) => ({ ...current, wishes: [wish, ...current.wishes] }))
+    const nextWish = { ...wish, isNewForHusband: true }
+    setData((current) => ({ ...current, wishes: [nextWish, ...current.wishes] }))
     setShowAdd(false)
     setActiveTab('wishes')
     setToast('Желание добавлено ✨')
     if (cloudProfile) {
-      try { await insertCloudWish(wish, cloudProfile) }
+      try { await insertCloudWish(nextWish, cloudProfile); void notifyPartner('wish', nextWish.title, `${location.origin}${location.pathname}?wish=${nextWish.id}`) }
       catch { setData((current) => ({ ...current, wishes: current.wishes.filter((item) => item.id !== wish.id) })); setToast('Не удалось сохранить желание') }
     }
+  }
+
+  function openWish(id: string) {
+    setSelectedWishId(id)
+    if (role !== 'husband') return
+    setData((current) => ({ ...current, wishes: current.wishes.map((wish) => wish.id === id ? { ...wish, isNewForHusband: false } : wish) }))
+    if (cloudProfile) markCloudWishSeen(id, cloudProfile).catch(() => undefined)
+  }
+
+  async function saveWish(wish: Wish) {
+    const previous = data.wishes.find((item) => item.id === wish.id)
+    if (!previous) return
+    setData((current) => ({ ...current, wishes: current.wishes.map((item) => item.id === wish.id ? wish : item) }))
+    setEditingWishId(null)
+    setSelectedWishId(wish.id)
+    setToast('Желание обновлено')
+    if (cloudProfile) {
+      try { await updateCloudWish(wish, cloudProfile, previous.image !== wish.image) }
+      catch { setData((current) => ({ ...current, wishes: current.wishes.map((item) => item.id === previous.id ? previous : item) })); setToast('Не удалось сохранить изменения') }
+    }
+  }
+
+  async function removeWish(id: string) {
+    const previous = data
+    setData((current) => ({ ...current, wishes: current.wishes.filter((wish) => wish.id !== id), comments: current.comments.filter((comment) => comment.wishId !== id) }))
+    setSelectedWishId(null)
+    if (cloudProfile) {
+      try { await deleteCloudWish(id); setToast('Желание удалено') }
+      catch { setData(previous); setToast('Не удалось удалить желание') }
+    } else setToast('Желание удалено')
   }
 
   function patchWish(id: string, patch: Partial<Wish>) {
@@ -169,7 +253,9 @@ function App() {
   function addMessage(message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) {
     const next: ChatMessage = { ...message, id: uid('message'), createdAt: new Date().toISOString(), read: false }
     setData((current) => ({ ...current, messages: [...current.messages, next] }))
-    if (cloudProfile) insertCloudMessage(next, cloudProfile).catch(() => {
+    if (cloudProfile) insertCloudMessage(next, cloudProfile).then(() => {
+      void notifyPartner('message', next.text || 'Отправлено фото', `${location.origin}${location.pathname}?tab=chat`)
+    }).catch(() => {
       setData((current) => ({ ...current, messages: current.messages.filter((item) => item.id !== next.id) }))
       setToast('Сообщение не отправлено. Проверьте интернет.')
     })
@@ -194,6 +280,14 @@ function App() {
     if (cloudProfile) deleteCloudEvent(id).catch(() => { setToast('Не удалось удалить событие'); fetchCloudData(cloudProfile).then(setData) })
   }
 
+  function editEvent(event: CalendarEvent) {
+    const previous = data.events.find((item) => item.id === event.id)
+    if (!previous) return
+    setData((current) => ({ ...current, events: current.events.map((item) => item.id === event.id ? event : item) }))
+    setToast('Событие обновлено')
+    if (cloudProfile) updateCloudEvent(event).catch(() => { setData((current) => ({ ...current, events: current.events.map((item) => item.id === previous.id ? previous : item) })); setToast('Не удалось изменить событие') })
+  }
+
   if (!isDemoMode && cloudState === 'checking') return <CloudLoading />
   if (!isDemoMode && cloudState === 'auth') return <AuthScreen role={pendingRole} error={cloudError} onSubmit={authenticate} onAnonymous={() => setRole(pendingRole)} onBack={() => { setCloudError(''); setCloudState('welcome') }} />
   if (!isDemoMode && cloudState === 'joining') return <JoinCouple error={cloudError} onJoin={joinPair} onBack={() => setRole(null)} />
@@ -202,6 +296,8 @@ function App() {
   const selectedWish = data.wishes.find((wish) => wish.id === selectedWishId)
   const unread = data.messages.filter((message) => message.author !== role && !message.read).length
   const completedCount = data.wishes.filter((wish) => wish.completedAt).length
+  const newWishCount = role === 'husband' ? data.wishes.filter((wish) => wish.isNewForHusband && !wish.completedAt).length : 0
+  const currentProfile = cloudProfile ? { displayName: cloudProfile.displayName || defaultProfiles[role].displayName, avatar: cloudProfile.avatar } : demoProfiles[role]
 
   return (
     <div className="app-shell">
@@ -213,17 +309,17 @@ function App() {
         <div className="top-actions">
           {isDemoMode && <span className="demo-badge">Демо</span>}
           <button className="icon-button" aria-label="Уведомления" onClick={() => setActiveTab('settings')}><Bell size={20} /></button>
-          <button className="avatar" aria-label="Профиль" onClick={() => setActiveTab('settings')}>{role === 'wife' ? 'А' : 'С'}</button>
+          <button className="avatar" aria-label="Профиль" onClick={() => setActiveTab('settings')}><UserAvatar {...currentProfile} /></button>
         </div>
       </header>
 
       <main className="main-content">
-        {activeTab === 'wishes' && <WishesView data={data} role={role} onOpen={setSelectedWishId} onAdd={() => setShowAdd(true)} onPatch={patchWish} />}
-        {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={setSelectedWishId} />}
-        {activeTab === 'calendar' && <CalendarView events={data.events} role={role} onAdd={addEvent} onDelete={deleteEvent} />}
-        {activeTab === 'done' && <DoneView wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={setSelectedWishId} />}
+        {activeTab === 'wishes' && <WishesView data={data} role={role} onOpen={openWish} onAdd={() => setShowAdd(true)} onPatch={patchWish} />}
+        {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={openWish} />}
+        {activeTab === 'calendar' && <CalendarView events={data.events} wishes={data.wishes} role={role} onAdd={addEvent} onUpdate={editEvent} onDelete={deleteEvent} onOpenWish={openWish} />}
+        {activeTab === 'done' && <DoneView wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={openWish} />}
         {activeTab === 'chat' && <ChatView role={role} messages={data.messages} onSend={addMessage} onLike={toggleMessageLike} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
-        {activeTab === 'settings' && <SettingsView role={role} profile={cloudProfile} onProtect={protectAccount} onSwitch={() => setRole(null)} />}
+        {activeTab === 'settings' && <SettingsView role={role} profile={cloudProfile} profileView={currentProfile} onUpdateProfile={saveProfile} onProtect={protectAccount} onSwitch={() => setRole(null)} onToast={setToast} />}
       </main>
 
       <nav className="bottom-nav" aria-label="Основная навигация">
@@ -231,7 +327,7 @@ function App() {
           const Icon = item.icon
           return (
             <button key={item.id} className={activeTab === item.id ? 'active' : ''} onClick={() => setActiveTab(item.id)}>
-              <span className="nav-icon"><Icon size={21} strokeWidth={activeTab === item.id ? 2.4 : 1.8} />{item.id === 'chat' && unread > 0 && <i>{unread}</i>}{item.id === 'done' && completedCount > 0 && <i className="done-count">{completedCount}</i>}</span>
+              <span className="nav-icon"><Icon size={21} strokeWidth={activeTab === item.id ? 2.4 : 1.8} />{item.id === 'wishes' && newWishCount > 0 && <i>{newWishCount}</i>}{item.id === 'chat' && unread > 0 && <i>{unread}</i>}{item.id === 'done' && completedCount > 0 && <i className="done-count">{completedCount}</i>}</span>
               <span>{item.label}</span>
             </button>
           )
@@ -243,6 +339,7 @@ function App() {
       )}
 
       {showAdd && <AddWishModal onClose={() => setShowAdd(false)} onAdd={addWish} />}
+      {editingWishId && <AddWishModal wish={data.wishes.find((item) => item.id === editingWishId)} onClose={() => setEditingWishId(null)} onAdd={saveWish} />}
       {selectedWish && (
         <WishDetail
           wish={selectedWish}
@@ -252,6 +349,8 @@ function App() {
           onPatch={(patch) => patchWish(selectedWish.id, patch)}
           onComment={(text) => addComment(selectedWish.id, text)}
           onToast={setToast}
+          onEdit={() => { setSelectedWishId(null); setEditingWishId(selectedWish.id) }}
+          onDelete={() => removeWish(selectedWish.id)}
         />
       )}
       {toast && <div className="toast"><Check size={18} />{toast}</div>}
@@ -417,10 +516,11 @@ function WishesView({ data, role, onOpen, onAdd, onPatch }: {
 function WishCard({ wish, role, onOpen, onPatch }: { wish: Wish; role: Role; onOpen: () => void; onPatch: (patch: Partial<Wish>) => void }) {
   const category = categories.find((item) => item.id === wish.categories[0])
   return (
-    <article className="wish-card" onClick={onOpen}>
+    <article className={`wish-card ${role === 'husband' && wish.isNewForHusband ? 'new-wish' : ''}`} onClick={onOpen}>
       <div className="wish-image-wrap">
         {wish.image ? <img src={wish.image} alt="" loading="lazy" /> : <div className="image-placeholder"><Gift size={34} /></div>}
         {category && <span className="category-pill">{category.label}</span>}
+        {role === 'husband' && wish.isNewForHusband && <span className="new-wish-badge">Новое</span>}
         {role === 'husband' && (
           <button className={`heart-button ${wish.likedByHusband ? 'liked' : ''}`} onClick={(e) => { e.stopPropagation(); onPatch({ likedByHusband: !wish.likedByHusband }) }} aria-label="Нравится">
             <Heart size={19} fill={wish.likedByHusband ? 'currentColor' : 'rgba(255,255,255,.2)'} />
@@ -501,22 +601,43 @@ function ChatView({ role, messages, onSend, onLike, onRead }: { role: Role; mess
   )
 }
 
-function SettingsView({ role, profile, onProtect, onSwitch }: { role: Role; profile: CloudProfile | null; onProtect: (email: string, password: string) => void; onSwitch: () => void }) {
-  const [notificationStatus, setNotificationStatus] = useState(Notification.permission)
+function SettingsView({ role, profile, profileView, onUpdateProfile, onProtect, onSwitch, onToast }: { role: Role; profile: CloudProfile | null; profileView: ProfileView; onUpdateProfile: (name: string, avatar?: string) => Promise<void>; onProtect: (email: string, password: string) => void; onSwitch: () => void; onToast: (text: string) => void }) {
+  const [notificationStatus, setNotificationStatus] = useState<NotificationPermission | 'unsupported'>(() => typeof Notification === 'undefined' ? 'unsupported' : Notification.permission)
+  const [notificationLoading, setNotificationLoading] = useState(false)
   const [installed, setInstalled] = useState(window.matchMedia('(display-mode: standalone)').matches)
   const [showAccount, setShowAccount] = useState(false)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [editingProfile, setEditingProfile] = useState(false)
+  const [profileName, setProfileName] = useState(profileView.displayName)
+  const [profileAvatar, setProfileAvatar] = useState(profileView.avatar)
+  const [profileSaving, setProfileSaving] = useState(false)
+  const avatarGalleryId = useId()
+  const avatarCameraId = useId()
+  async function chooseAvatar(file?: File) { if (file) setProfileAvatar(await fileToDataUrl(file)) }
   async function askNotifications() {
-    const status = await Notification.requestPermission()
-    setNotificationStatus(status)
+    if (typeof Notification === 'undefined' || !profile) { setNotificationStatus('unsupported'); onToast('Установите приложение на главный экран'); return }
+    try {
+      setNotificationLoading(true)
+      await enableCloudPush(profile)
+      setNotificationStatus('granted')
+      onToast('Пуш-уведомления включены')
+    } catch (error) {
+      setNotificationStatus(Notification.permission)
+      onToast(error instanceof Error ? error.message : 'Не удалось включить уведомления')
+    } finally { setNotificationLoading(false) }
   }
   return (
     <div className="page settings-page">
       <section className="hero-row"><div><p className="eyebrow">Ваше пространство</p><h1>Настройки</h1></div></section>
-      <div className="profile-card"><div className="profile-avatar">{role === 'wife' ? 'А' : 'С'}</div><div><h2>{role === 'wife' ? 'Алла' : 'Стас'}</h2><p>{role === 'wife' ? 'Добавляет мечты' : 'Исполняет мечты'}</p></div><span className="online">в сети</span></div>
+      <div className="profile-card"><UserAvatar {...profileView} className="profile-avatar" /><div><h2>{profileView.displayName}</h2><p>{role === 'wife' ? 'Добавляет мечты' : 'Исполняет мечты'}</p></div><button className="profile-edit" onClick={() => { setProfileName(profileView.displayName); setProfileAvatar(profileView.avatar); setEditingProfile((value) => !value) }}><Pencil size={15} />{editingProfile ? 'Закрыть' : 'Изменить'}</button></div>
+      {editingProfile && <form className="profile-editor" onSubmit={async (event) => { event.preventDefault(); if (!profileName.trim()) return; setProfileSaving(true); await onUpdateProfile(profileName, profileAvatar); setProfileSaving(false); setEditingProfile(false) }}>
+        <div className="profile-photo-edit"><UserAvatar displayName={profileName || profileView.displayName} avatar={profileAvatar} className="profile-avatar large" /><div><strong>Фото профиля</strong><span>Можно выбрать из галереи или снять новое</span><div className="profile-photo-actions"><label htmlFor={avatarGalleryId}><ImageIcon size={15} />Галерея</label><label htmlFor={avatarCameraId}><Camera size={15} />Камера</label>{profileAvatar && <button type="button" onClick={() => setProfileAvatar(undefined)}>Убрать</button>}</div></div><input id={avatarGalleryId} className="file-input" type="file" accept="image/*" onChange={(event) => void chooseAvatar(event.target.files?.[0])} /><input id={avatarCameraId} className="file-input" type="file" accept="image/*" capture="environment" onChange={(event) => void chooseAvatar(event.target.files?.[0])} /></div>
+        <label className="field"><span>Имя</span><input value={profileName} maxLength={80} onChange={(event) => setProfileName(event.target.value)} placeholder={role === 'wife' ? 'Алла' : 'Стас'} /></label>
+        <button className="primary-button wide" disabled={!profileName.trim() || profileSaving}>{profileSaving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{profileSaving ? 'Сохраняем…' : 'Сохранить профиль'}</button>
+      </form>}
       <div className="settings-group"><h3>Приложение</h3>
-        <button onClick={askNotifications}><span className="setting-icon"><BellRing /></span><span><strong>Уведомления</strong><small>{notificationStatus === 'granted' ? 'Включены' : notificationStatus === 'denied' ? 'Запрещены в браузере' : 'Получать новости о желаниях'}</small></span><em>{notificationStatus === 'granted' ? 'Вкл.' : 'Настроить'}</em></button>
+        <button onClick={askNotifications} disabled={notificationLoading}><span className="setting-icon"><BellRing /></span><span><strong>Пуш-уведомления</strong><small>{notificationStatus === 'granted' ? 'Новые желания и сообщения' : notificationStatus === 'denied' ? 'Запрещены в настройках телефона' : notificationStatus === 'unsupported' ? 'Установите приложение на экран Домой' : 'Включить на этом телефоне'}</small></span><em>{notificationLoading ? '…' : notificationStatus === 'granted' ? 'Вкл.' : 'Настроить'}</em></button>
         <button onClick={() => setInstalled(true)}><span className="setting-icon"><Upload /></span><span><strong>Установить приложение</strong><small>{installed ? 'Открывается как приложение' : 'Добавьте на домашний экран'}</small></span><em>{installed ? 'Готово' : 'Как?'}</em></button>
       </div>
       {!isDemoMode && <div className="settings-group"><h3>Личный кабинет</h3>
@@ -525,7 +646,7 @@ function SettingsView({ role, profile, onProtect, onSwitch }: { role: Role; prof
           {showAccount && <form className="account-form" onSubmit={(event) => { event.preventDefault(); if (email.trim() && password.length >= 6) onProtect(email.trim().toLowerCase(), password) }}><label className="field"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label className="field"><span>Пароль</span><input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Минимум 6 символов" /></label><button className="primary-button wide" disabled={!email.trim() || password.length < 6}>Сохранить кабинет</button></form>}
         </>}
       </div>}
-      <div className="settings-group"><h3>Пара</h3><div className="pair-card"><span className="role-avatar wife">А</span><Heart size={18} fill="currentColor" /><span className="role-avatar husband">С</span><div><strong>Алла и Стас</strong><small>вместе в приложении</small></div></div></div>
+      <div className="settings-group"><h3>Пара</h3><div className="pair-card"><span className="role-avatar wife">{role === 'wife' ? initialFor(profileView.displayName) : 'А'}</span><Heart size={18} fill="currentColor" /><span className="role-avatar husband">{role === 'husband' ? initialFor(profileView.displayName) : 'С'}</span><div><strong>{role === 'wife' ? profileView.displayName : 'Алла'} и {role === 'husband' ? profileView.displayName : 'Стас'}</strong><small>вместе в приложении</small></div></div></div>
       {profile?.inviteCode && <button className="invite-code" onClick={() => { void navigator.clipboard?.writeText(profile.inviteCode) }}><span><small>Код пары</small><strong>{profile.inviteCode}</strong></span><em>Нажмите, чтобы скопировать</em></button>}
       {isDemoMode && <div className="demo-note"><Sparkles /><div><strong>Сейчас включён демо-режим</strong><p>Все функции можно попробовать в этом браузере. Подключите Supabase по инструкции в README, чтобы синхронизировать два телефона.</p></div></div>}
       <button className="secondary-button switch-user" onClick={onSwitch}><UserRound size={18} />Сменить пользователя</button>
@@ -533,21 +654,21 @@ function SettingsView({ role, profile, onProtect, onSwitch }: { role: Role; prof
   )
 }
 
-function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: Wish) => void }) {
+function AddWishModal({ wish, onClose, onAdd }: { wish?: Wish; onClose: () => void; onAdd: (wish: Wish) => void }) {
   const [mode, setMode] = useState<'link' | 'manual'>('manual')
-  const [link, setLink] = useState('')
+  const [link, setLink] = useState(wish?.link || '')
   const [loadingLink, setLoadingLink] = useState(false)
   const [error, setError] = useState('')
-  const [title, setTitle] = useState('')
-  const [description, setDescription] = useState('')
-  const [price, setPrice] = useState('')
-  const [stars, setStars] = useState<1 | 2 | 3 | 4 | 5>(5)
-  const [selectedCategories, setSelectedCategories] = useState<CategoryId[]>(['everyday'])
-  const [image, setImage] = useState<string>()
-  const [details, setDetails] = useState('')
-  const [targetDate, setTargetDate] = useState('')
-  const galleryRef = useRef<HTMLInputElement>(null)
-  const cameraRef = useRef<HTMLInputElement>(null)
+  const [title, setTitle] = useState(wish?.title || '')
+  const [description, setDescription] = useState(wish?.description || '')
+  const [price, setPrice] = useState(wish?.price == null ? '' : String(wish.price))
+  const [stars, setStars] = useState<1 | 2 | 3 | 4 | 5>(wish?.stars || 5)
+  const [selectedCategories, setSelectedCategories] = useState<CategoryId[]>(wish?.categories || ['everyday'])
+  const [image, setImage] = useState<string | undefined>(wish?.image)
+  const [details, setDetails] = useState(wish?.details || '')
+  const [targetDate, setTargetDate] = useState(wish?.targetDate || '')
+  const galleryId = useId()
+  const cameraId = useId()
 
   async function importLink() {
     try {
@@ -568,13 +689,13 @@ function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: W
   function submit(event: FormEvent) {
     event.preventDefault()
     if (!title.trim()) { setError('Добавьте название желания'); return }
-    onAdd({ id: uid('wish'), title: title.trim(), description: description.trim(), link: link.trim() || undefined, price: price ? Number(price) : undefined, image, images: image ? [image] : [], categories: selectedCategories.length ? selectedCategories : ['everyday'], stars, details: details.trim() || undefined, targetDate: targetDate || undefined, createdAt: new Date().toISOString() })
+    onAdd({ ...wish, id: wish?.id || uid('wish'), title: title.trim(), description: description.trim(), link: link.trim() || undefined, price: price ? Number(price) : undefined, image, images: image ? [image] : [], categories: selectedCategories.length ? selectedCategories : ['everyday'], stars, details: details.trim() || undefined, targetDate: targetDate || undefined, createdAt: wish?.createdAt || new Date().toISOString() })
   }
 
   return (
     <Modal onClose={onClose} className="add-modal">
-      <div className="modal-head"><div><p className="eyebrow">Новая мечта</p><h2>Добавить желание</h2></div><button className="icon-button" onClick={onClose}><X /></button></div>
-      <div className="mode-switch"><button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Sparkles size={18} />Вручную</button><button className={mode === 'link' ? 'active' : ''} onClick={() => setMode('link')}><Link2 size={18} />По ссылке</button></div>
+      <div className="modal-head"><div><p className="eyebrow">{wish ? 'Редактирование' : 'Новая мечта'}</p><h2>{wish ? 'Изменить желание' : 'Добавить желание'}</h2></div><button className="icon-button" onClick={onClose}><X /></button></div>
+      {!wish && <div className="mode-switch"><button className={mode === 'manual' ? 'active' : ''} onClick={() => setMode('manual')}><Sparkles size={18} />Вручную</button><button className={mode === 'link' ? 'active' : ''} onClick={() => setMode('link')}><Link2 size={18} />По ссылке</button></div>}
       {mode === 'link' ? (
         <div className="link-import">
           <div className="import-illustration"><Link2 size={34} /><span><Sparkles size={14} /></span></div>
@@ -587,26 +708,27 @@ function AddWishModal({ onClose, onAdd }: { onClose: () => void; onAdd: (wish: W
       ) : (
         <form className="wish-form" onSubmit={submit}>
           {link && <div className="imported-link"><Link2 size={16} /><span>{safeHost(link)}</span><button type="button" onClick={() => setLink('')}><X size={15} /></button></div>}
-          <div className="photo-picker">{image ? <><img src={image} alt="Выбранная обложка" /><button type="button" className="remove-photo" onClick={() => setImage(undefined)}><X size={16} /></button></> : <><div><Camera size={25} /></div><strong>Добавить фотографию</strong><span>выберите удобный способ</span></>}<div className="photo-actions"><button type="button" onClick={() => galleryRef.current?.click()}><ImageIcon size={17} />Галерея</button><button type="button" onClick={() => cameraRef.current?.click()}><Camera size={17} />Камера</button></div><input ref={galleryRef} type="file" hidden accept="image/*" onChange={(e) => { void chooseImage(e.target.files?.[0]); e.currentTarget.value = '' }} /><input ref={cameraRef} type="file" hidden accept="image/*" capture="environment" onChange={(e) => { void chooseImage(e.target.files?.[0]); e.currentTarget.value = '' }} /></div>
+          <div className="photo-picker">{image ? <><img src={image} alt="Выбранная обложка" /><button type="button" className="remove-photo" onClick={() => setImage(undefined)}><X size={16} /></button></> : <><div><Camera size={25} /></div><strong>Добавить фотографию</strong><span>выберите удобный способ</span></>}<div className="photo-actions"><label htmlFor={galleryId}><ImageIcon size={17} />Галерея</label><label htmlFor={cameraId}><Camera size={17} />Камера</label></div><input id={galleryId} className="file-input" type="file" accept="image/*" onChange={(e) => { void chooseImage(e.target.files?.[0]); e.currentTarget.value = '' }} /><input id={cameraId} className="file-input" type="file" accept="image/*" capture="environment" onChange={(e) => { void chooseImage(e.target.files?.[0]); e.currentTarget.value = '' }} /></div>
           <label className="field"><span>Название *</span><input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="О чём мечтаешь?" /></label>
           <label className="field"><span>Описание</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Расскажи подробнее…" rows={3} /></label>
           {!link && <label className="field"><span>Ссылка</span><div className="input-with-icon"><Link2 size={18} /><input type="url" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://…" /></div></label>}
-          <div className="form-two"><label className="field"><span>Стоимость, ₽</span><input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="Необязательно" /></label><label className="field"><span>Когда хочется исполнить</span><input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} /></label></div>
+          <div className="form-two"><label className="field"><span>Стоимость, ₽</span><input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="Необязательно" /></label><label className="field"><span>Когда хочется исполнить</span><input type="date" value={targetDate} onInput={(e) => setTargetDate(e.currentTarget.value)} /></label></div>
           <label className="field"><span>Насколько хочется</span><div className="form-stars">{[1,2,3,4,5].map((n) => <button type="button" key={n} onClick={() => setStars(n as 1|2|3|4|5)}><Star size={22} fill={n <= stars ? 'currentColor' : 'none'} /></button>)}</div></label>
           <fieldset><legend>Разделы</legend><div className="category-options">{categories.map((item) => { const Icon = iconMap[item.icon]; return <button type="button" key={item.id} className={selectedCategories.includes(item.id) ? 'active' : ''} onClick={() => toggleCategory(item.id)}><Icon size={17} />{item.label}{selectedCategories.includes(item.id) && <Check size={14} />}</button> })}</div></fieldset>
           <label className="field"><span>Размер, цвет и другие детали</span><textarea value={details} onChange={(e) => setDetails(e.target.value)} placeholder="Например: размер M, молочный цвет" rows={2} /></label>
           {error && <p className="form-error">{error}</p>}
-          <div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Отмена</button><button className="primary-button" type="submit"><Heart size={18} />Добавить желание</button></div>
+          <div className="form-actions"><button type="button" className="secondary-button" onClick={onClose}>Отмена</button><button className="primary-button" type="submit"><Heart size={18} />{wish ? 'Сохранить' : 'Добавить желание'}</button></div>
         </form>
       )}
     </Modal>
   )
 }
 
-function WishDetail({ wish, role, comments, onClose, onPatch, onComment, onToast }: {
-  wish: Wish; role: Role; comments: AppData['comments']; onClose: () => void; onPatch: (patch: Partial<Wish>) => void; onComment: (text: string) => void; onToast: (text: string) => void
+function WishDetail({ wish, role, comments, onClose, onPatch, onComment, onToast, onEdit, onDelete }: {
+  wish: Wish; role: Role; comments: AppData['comments']; onClose: () => void; onPatch: (patch: Partial<Wish>) => void; onComment: (text: string) => void; onToast: (text: string) => void; onEdit: () => void; onDelete: () => void
 }) {
   const [comment, setComment] = useState('')
+  const [confirmDelete, setConfirmDelete] = useState(false)
   const completed = Boolean(wish.completedAt)
   function submitComment(event: FormEvent) { event.preventDefault(); onComment(comment); setComment('') }
   return (
@@ -628,6 +750,7 @@ function WishDetail({ wish, role, comments, onClose, onPatch, onComment, onToast
         {role === 'husband' && !completed && <button className={`reserve-button ${wish.reservedByHusband ? 'selected' : ''}`} onClick={() => { onPatch({ reservedByHusband: !wish.reservedByHusband }); onToast(wish.reservedByHusband ? 'Выбор отменён' : 'Сохранено только для вас') }}>{wish.reservedByHusband ? <><CheckCircle2 />Вы выбрали это желание</> : <><Gift />Хочу исполнить</>}<small>{wish.reservedByHusband ? 'Жена не видит эту отметку' : 'Отметка будет видна только вам'}</small></button>}
         {role === 'wife' && !completed && <button className="complete-button" onClick={() => { onPatch({ completedAt: new Date().toISOString() }); onToast('Мечта исполнена 🤍') }}><CheckCircle2 size={20} />Отметить исполненным</button>}
         {role === 'wife' && completed && <button className="secondary-button wide" onClick={() => onPatch({ completedAt: undefined })}>Вернуть в актуальные</button>}
+        {role === 'wife' && <div className="wish-owner-actions"><button className="secondary-button" onClick={onEdit}><Pencil size={16} />Редактировать</button>{confirmDelete ? <><button className="danger-button" onClick={onDelete}><Trash2 size={16} />Удалить точно</button><button className="text-button" onClick={() => setConfirmDelete(false)}>Отмена</button></> : <button className="delete-link" onClick={() => setConfirmDelete(true)}><Trash2 size={16} />Удалить</button>}</div>}
         <section className="comments-section"><div className="section-title"><h3>Комментарии</h3><span>{comments.length}</span></div>
           {comments.map((item) => <div className="comment" key={item.id}><span className="comment-avatar">{item.author === 'wife' ? 'А' : 'С'}</span><div><strong>{item.author === 'wife' ? 'Алла' : 'Стас'}<small>{formatShortDate(item.createdAt)}</small></strong><p>{item.text}</p></div></div>)}
           <form className="comment-form" onSubmit={submitComment}><span className="comment-avatar">{role === 'wife' ? 'А' : 'С'}</span><div><input value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Оставить тёплый комментарий…" /><button type="submit" disabled={!comment.trim()}><Send size={17} /></button></div></form>

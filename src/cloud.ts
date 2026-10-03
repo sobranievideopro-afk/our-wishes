@@ -7,6 +7,7 @@ export interface CloudProfile {
   coupleId: string
   role: Role
   displayName: string
+  avatar?: string
   inviteCode: string
   email?: string
   anonymous?: boolean
@@ -39,7 +40,7 @@ export async function restoreProfile(): Promise<CloudProfile | null> {
   const api = client()
   const { data: sessionData } = await api.auth.getSession()
   if (!sessionData.session) return null
-  const { data: profile } = await retryResult(() => api.from('profiles').select('id,couple_id,role,display_name').eq('id', sessionData.session.user.id).maybeSingle())
+  const { data: profile } = await retryResult(() => api.from('profiles').select('id,couple_id,role,display_name,avatar_path').eq('id', sessionData.session.user.id).maybeSingle())
   if (!profile?.couple_id || !profile.role) return null
   const { data: couple } = await retryResult(() => api.from('couples').select('invite_code').eq('id', profile.couple_id).single())
   return {
@@ -47,6 +48,7 @@ export async function restoreProfile(): Promise<CloudProfile | null> {
     coupleId: profile.couple_id,
     role: profile.role as Role,
     displayName: profile.display_name,
+    avatar: await mediaUrl(profile.avatar_path),
     inviteCode: couple?.invite_code || '',
     email: sessionData.session.user.email,
     anonymous: sessionData.session.user.is_anonymous,
@@ -119,7 +121,7 @@ async function mediaUrl(path?: string | null) {
 
 export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
   const api = client()
-  const [wishesResult, commentsResult, likesResult, reservationsResult, messagesResult, profilesResult, eventsResult, messageLikesResult] = await Promise.all([
+  const [wishesResult, commentsResult, likesResult, reservationsResult, messagesResult, profilesResult, eventsResult, messageLikesResult, wishViewsResult] = await Promise.all([
     retryResult(() => api.from('wishes').select('*').eq('couple_id', profile.coupleId).order('created_at', { ascending: false })),
     retryResult(() => api.from('wish_comments').select('*').order('created_at')),
     retryResult(() => api.from('wish_likes').select('*')),
@@ -128,11 +130,13 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     retryResult(() => api.from('profiles').select('id,role').eq('couple_id', profile.coupleId)),
     retryResult(() => api.from('couple_events').select('*').eq('couple_id', profile.coupleId).order('event_date')),
     retryResult(() => api.from('message_likes').select('*')),
+    profile.role === 'husband' ? retryResult(() => api.from('wish_views').select('wish_id').eq('user_id', profile.id)) : Promise.resolve({ data: [] }),
   ])
   const roleById = new Map((profilesResult.data || []).map((item: any) => [item.id, item.role as Role]))
   const likedIds = new Set((likesResult.data || []).filter((item: any) => item.user_id === profile.id).map((item: any) => item.wish_id))
   const reservedIds = new Set((reservationsResult.data || []).map((item: any) => item.wish_id))
   const messageLikeRows = messageLikesResult.data || []
+  const viewedWishIds = new Set((wishViewsResult.data || []).map((item: any) => item.wish_id))
 
   const wishes: Wish[] = await Promise.all((wishesResult.data || []).map(async (row: any) => ({
     id: row.id,
@@ -150,6 +154,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     completionNote: row.completion_note || undefined,
     likedByHusband: likedIds.has(row.id),
     reservedByHusband: reservedIds.has(row.id),
+    isNewForHusband: profile.role === 'husband' && !viewedWishIds.has(row.id),
   })))
   const comments: WishComment[] = (commentsResult.data || []).map((row: any) => ({ id: row.id, wishId: row.wish_id, author: roleById.get(row.author_id) || 'wife', text: row.text, createdAt: row.created_at }))
   const messages: ChatMessage[] = await Promise.all((messagesResult.data || []).map(async (row: any) => ({ id: row.id, author: roleById.get(row.author_id) || 'wife', text: row.text || undefined, image: await mediaUrl(row.image_path), createdAt: row.created_at, read: true, likedByMe: messageLikeRows.some((like: any) => like.message_id === row.id && like.user_id === profile.id), likeCount: messageLikeRows.filter((like: any) => like.message_id === row.id).length })))
@@ -157,7 +162,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
   return { wishes, comments, messages, events }
 }
 
-async function uploadDataUrl(value: string | undefined, profile: CloudProfile, folder: 'wishes' | 'chat') {
+async function uploadDataUrl(value: string | undefined, profile: CloudProfile, folder: 'wishes' | 'chat' | 'profiles') {
   if (!value || !value.startsWith('data:')) return value
   const response = await fetch(value)
   const blob = await response.blob()
@@ -167,6 +172,17 @@ async function uploadDataUrl(value: string | undefined, profile: CloudProfile, f
   return path
 }
 
+export async function updateCloudProfile(profile: CloudProfile, displayName: string, avatar: string | undefined, imageChanged: boolean) {
+  const values: Record<string, unknown> = { display_name: displayName }
+  let avatarPath: string | undefined
+  if (imageChanged) {
+    avatarPath = await uploadDataUrl(avatar, profile, 'profiles')
+    values.avatar_path = avatarPath || null
+  }
+  await retryResult(() => client().from('profiles').update(values).eq('id', profile.id))
+  return { displayName, avatar: imageChanged ? await mediaUrl(avatarPath) : avatar }
+}
+
 export async function insertCloudWish(wish: Wish, profile: CloudProfile) {
   const coverPath = await uploadDataUrl(wish.image, profile, 'wishes')
   await retryResult(() => client().from('wishes').insert({
@@ -174,6 +190,28 @@ export async function insertCloudWish(wish: Wish, profile: CloudProfile) {
     description: wish.description, source_url: wish.link, price: wish.price, cover_path: coverPath,
     image_paths: coverPath ? [coverPath] : [], categories: wish.categories, stars: wish.stars, details: wish.details, target_date: wish.targetDate,
   }))
+}
+
+export async function updateCloudWish(wish: Wish, profile: CloudProfile, imageChanged: boolean) {
+  const values: Record<string, unknown> = {
+    title: wish.title, description: wish.description, source_url: wish.link || null, price: wish.price ?? null,
+    categories: wish.categories, stars: wish.stars, details: wish.details || null, target_date: wish.targetDate || null,
+    updated_at: new Date().toISOString(),
+  }
+  if (imageChanged) {
+    const coverPath = await uploadDataUrl(wish.image, profile, 'wishes')
+    values.cover_path = coverPath || null
+    values.image_paths = coverPath ? [coverPath] : []
+  }
+  await retryResult(() => client().from('wishes').update(values).eq('id', wish.id))
+}
+
+export async function deleteCloudWish(wishId: string) {
+  await retryResult(() => client().from('wishes').delete().eq('id', wishId))
+}
+
+export async function markCloudWishSeen(wishId: string, profile: CloudProfile) {
+  await retryResult(() => client().from('wish_views').upsert({ wish_id: wishId, user_id: profile.id }, { onConflict: 'wish_id,user_id' }))
 }
 
 export async function insertCloudComment(comment: WishComment, profile: CloudProfile) {
@@ -211,8 +249,38 @@ export async function insertCloudEvent(event: CalendarEvent, profile: CloudProfi
   await retryResult(() => client().from('couple_events').insert({ id: event.id, couple_id: profile.coupleId, author_id: profile.id, title: event.title, event_date: event.date, event_time: event.time, emojis: event.emojis, note: event.note }))
 }
 
+export async function updateCloudEvent(event: CalendarEvent) {
+  await retryResult(() => client().from('couple_events').update({ title: event.title, event_date: event.date, event_time: event.time || null, emojis: event.emojis, note: event.note || null, updated_at: new Date().toISOString() }).eq('id', event.id))
+}
+
 export async function deleteCloudEvent(eventId: string) {
   await retryResult(() => client().from('couple_events').delete().eq('id', eventId))
+}
+
+function base64UrlToBytes(value: string) {
+  const padding = '='.repeat((4 - value.length % 4) % 4)
+  const binary = atob((value + padding).replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0))
+}
+
+export async function enableCloudPush(profile: CloudProfile) {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) throw new Error('Уведомления не поддерживаются на этом устройстве')
+  const permission = await Notification.requestPermission()
+  if (permission !== 'granted') throw new Error('Разрешение на уведомления не выдано')
+  const api = client()
+  const { data: keyData, error: keyError } = await api.functions.invoke('push-notify', { body: { action: 'vapid-key' } })
+  if (keyError || !keyData?.publicKey) throw keyError || new Error('Не удалось получить ключ уведомлений')
+  const registration = await navigator.serviceWorker.ready
+  const subscription = await registration.pushManager.getSubscription() || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64UrlToBytes(keyData.publicKey) })
+  const json = subscription.toJSON()
+  if (!json.endpoint || !json.keys?.p256dh || !json.keys?.auth) throw new Error('Браузер не вернул данные подписки')
+  await retryResult(() => api.from('push_subscriptions').upsert({ user_id: profile.id, endpoint: json.endpoint, p256dh: json.keys!.p256dh, auth: json.keys!.auth }, { onConflict: 'user_id,endpoint' }))
+  return true
+}
+
+export async function notifyPartner(kind: 'wish' | 'message', body: string, url: string) {
+  const { error } = await client().functions.invoke('push-notify', { body: { action: 'notify', kind, body: body.slice(0, 180), url } })
+  if (error) throw error
 }
 
 export function subscribeToCloud(profile: CloudProfile, refresh: () => void): RealtimeChannel {
@@ -223,6 +291,7 @@ export function subscribeToCloud(profile: CloudProfile, refresh: () => void): Re
     .on('postgres_changes', { event: '*', schema: 'public', table: 'wish_likes' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'couple_events', filter: `couple_id=eq.${profile.coupleId}` }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'message_likes' }, refresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'wish_views' }, refresh)
     .subscribe()
 }
 

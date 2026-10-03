@@ -22,6 +22,7 @@ export interface Wish {
   reservedByHusband?: boolean
   likedByHusband?: boolean
   completionNote?: string
+  isNewForHusband?: boolean
 }
 
 export interface WishComment {

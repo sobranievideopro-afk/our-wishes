@@ -1,4 +1,4 @@
-const CACHE = 'our-wishes-v1'
+const CACHE = 'our-wishes-v2'
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg']
 
 self.addEventListener('install', (event) => {
@@ -26,6 +26,8 @@ self.addEventListener('push', (event) => {
     body: data.body || 'Загляните в ваш общий список',
     icon: './icon-192.png',
     badge: './icon-192.png',
+    tag: data.kind || 'our-wishes',
+    renotify: true,
     data: { url: data.url || './' }
   }))
 })
