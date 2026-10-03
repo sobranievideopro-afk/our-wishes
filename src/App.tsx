@@ -11,9 +11,9 @@ import type { LucideIcon } from 'lucide-react'
 import { categories } from './data'
 import { fileToDataUrl, formatPrice, formatShortDate, importFromLink, isDemoMode, loadDemoData, saveDemoData, supabase, uid } from './lib'
 import {
-  createCloudCouple, fetchCloudData, insertCloudComment, insertCloudMessage, insertCloudWish,
-  joinCloudCouple, restoreProfile, setCloudCompleted, setCloudLike, setCloudReservation,
-  signOutCloud, subscribeToCloud, type CloudProfile,
+  authenticateCloud, createCloudCouple, fetchCloudData, insertCloudComment, insertCloudMessage, insertCloudWish,
+  joinCloudCouple, linkCloudAccount, restoreProfile, setCloudCompleted, setCloudLike, setCloudReservation,
+  signOutCloud, subscribeToCloud, type AuthMode, type CloudProfile,
 } from './cloud'
 import type { AppData, CategoryId, ChatMessage, Role, Tab, Wish } from './types'
 
@@ -35,7 +35,8 @@ function App() {
   const [role, setRoleState] = useState<Role | null>(() => isDemoMode ? localStorage.getItem('our-wishes-role') as Role | null : null)
   const [data, setData] = useState<AppData>(() => isDemoMode ? loadDemoData() : { wishes: [], comments: [], messages: [] })
   const [cloudProfile, setCloudProfile] = useState<CloudProfile | null>(null)
-  const [cloudState, setCloudState] = useState<'checking' | 'welcome' | 'joining' | 'ready'>(() => isDemoMode ? 'ready' : 'checking')
+  const [cloudState, setCloudState] = useState<'checking' | 'welcome' | 'auth' | 'joining' | 'ready'>(() => isDemoMode ? 'ready' : 'checking')
+  const [pendingRole, setPendingRole] = useState<Role>('wife')
   const [cloudError, setCloudError] = useState('')
   const [activeTab, setActiveTab] = useState<Tab>('wishes')
   const [selectedWishId, setSelectedWishId] = useState<string | null>(null)
@@ -87,6 +88,40 @@ function App() {
     }
   }
 
+  function chooseRole(next: Role) {
+    if (isDemoMode) { void setRole(next); return }
+    setPendingRole(next)
+    setCloudError('')
+    setCloudState('auth')
+  }
+
+  async function authenticate(email: string, password: string, mode: AuthMode) {
+    try {
+      setCloudError(''); setCloudState('checking')
+      const result = await authenticateCloud(email, password, pendingRole, mode)
+      if (result === 'confirm-required') {
+        setCloudError('Подтвердите адрес по ссылке из письма, затем войдите.')
+        setCloudState('auth')
+        return
+      }
+      if (result === 'join-required') { setRoleState('husband'); setCloudState('joining'); return }
+      setCloudProfile(result); setRoleState(result.role); setCloudState('ready')
+    } catch (error) {
+      setCloudError(error instanceof Error ? error.message : 'Не удалось войти')
+      setCloudState('auth')
+    }
+  }
+
+  async function protectAccount(email: string, password: string) {
+    try {
+      const account = await linkCloudAccount(email, password)
+      setCloudProfile((current) => current ? { ...current, ...account } : current)
+      setToast(account.anonymous ? 'Подтвердите email по ссылке из письма' : 'Кабинет защищён email и паролем')
+    } catch (error) {
+      setToast(error instanceof Error ? error.message : 'Не удалось сохранить аккаунт')
+    }
+  }
+
   async function joinPair(code: string) {
     try {
       setCloudError(''); setCloudState('checking')
@@ -125,24 +160,21 @@ function App() {
 
   function addComment(wishId: string, text: string) {
     if (!role || !text.trim()) return
-    setData((current) => ({
-      ...current,
-      comments: [...current.comments, { id: uid('comment'), wishId, author: role, text: text.trim(), createdAt: new Date().toISOString() }],
-    }))
-    if (cloudProfile) insertCloudComment(wishId, text.trim(), cloudProfile).catch(() => setToast('Комментарий не отправлен'))
+    const comment = { id: uid('comment'), wishId, author: role, text: text.trim(), createdAt: new Date().toISOString() }
+    setData((current) => ({ ...current, comments: [...current.comments, comment] }))
+    if (cloudProfile) insertCloudComment(comment, cloudProfile).catch(() => setToast('Комментарий не отправлен. Проверьте интернет.'))
   }
 
   function addMessage(message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) {
-    setData((current) => ({
-      ...current,
-      messages: [...current.messages, { ...message, id: uid('message'), createdAt: new Date().toISOString(), read: false }],
-    }))
-    if (cloudProfile) insertCloudMessage(message, cloudProfile).catch(() => setToast('Сообщение не отправлено'))
+    const next: ChatMessage = { ...message, id: uid('message'), createdAt: new Date().toISOString(), read: false }
+    setData((current) => ({ ...current, messages: [...current.messages, next] }))
+    if (cloudProfile) insertCloudMessage(next, cloudProfile).catch(() => setToast('Сообщение не отправлено. Проверьте интернет.'))
   }
 
   if (!isDemoMode && cloudState === 'checking') return <CloudLoading />
+  if (!isDemoMode && cloudState === 'auth') return <AuthScreen role={pendingRole} error={cloudError} onSubmit={authenticate} onAnonymous={() => setRole(pendingRole)} onBack={() => { setCloudError(''); setCloudState('welcome') }} />
   if (!isDemoMode && cloudState === 'joining') return <JoinCouple error={cloudError} onJoin={joinPair} onBack={() => setRole(null)} />
-  if (!role) return <Welcome onChoose={setRole} error={cloudError} />
+  if (!role) return <Welcome onChoose={chooseRole} error={cloudError} />
 
   const selectedWish = data.wishes.find((wish) => wish.id === selectedWishId)
   const unread = data.messages.filter((message) => message.author !== role && !message.read).length
@@ -167,7 +199,7 @@ function App() {
         {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={setSelectedWishId} />}
         {activeTab === 'done' && <DoneView wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={setSelectedWishId} />}
         {activeTab === 'chat' && <ChatView role={role} messages={data.messages} onSend={addMessage} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
-        {activeTab === 'settings' && <SettingsView role={role} inviteCode={cloudProfile?.inviteCode} onSwitch={() => setRole(null)} />}
+        {activeTab === 'settings' && <SettingsView role={role} profile={cloudProfile} onProtect={protectAccount} onSwitch={() => setRole(null)} />}
       </main>
 
       <nav className="bottom-nav" aria-label="Основная навигация">
@@ -226,6 +258,44 @@ function Welcome({ onChoose, error }: { onChoose: (role: Role) => void; error?: 
 
 function CloudLoading() {
   return <div className="cloud-screen"><div className="welcome-icon"><Heart fill="currentColor" size={38} /></div><LoaderCircle className="spin" /><p>Открываем ваше пространство…</p></div>
+}
+
+function AuthScreen({ role, error, onSubmit, onAnonymous, onBack }: {
+  role: Role
+  error?: string
+  onSubmit: (email: string, password: string, mode: AuthMode) => void
+  onAnonymous: () => void
+  onBack: () => void
+}) {
+  const [mode, setMode] = useState<AuthMode>('register')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  function submit(event: FormEvent) {
+    event.preventDefault()
+    if (email.trim() && password.length >= 6) onSubmit(email.trim().toLowerCase(), password, mode)
+  }
+  return (
+    <div className="welcome-screen">
+      <div className="welcome-orb orb-one" /><div className="welcome-orb orb-two" />
+      <div className="welcome-content auth-content">
+        <div className="welcome-icon"><CircleUserRound size={42} /></div>
+        <p className="eyebrow">Личный кабинет</p>
+        <h1>{role === 'wife' ? 'Кабинет Аллы' : 'Кабинет Стаса'}</h1>
+        <p className="welcome-copy">Email и пароль сохранят доступ к вашему списку при смене или переустановке телефона.</p>
+        <div className="auth-card">
+          <div className="mode-switch"><button type="button" className={mode === 'register' ? 'active' : ''} onClick={() => setMode('register')}>Создать кабинет</button><button type="button" className={mode === 'login' ? 'active' : ''} onClick={() => setMode('login')}>Войти</button></div>
+          <form onSubmit={submit}>
+            <label className="field"><span>Email</span><input autoFocus type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" /></label>
+            <label className="field"><span>Пароль</span><input type="password" autoComplete={mode === 'register' ? 'new-password' : 'current-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Минимум 6 символов" /></label>
+            {error && <p className="form-error">{error}</p>}
+            <button className="primary-button wide" disabled={!email.trim() || password.length < 6}>{mode === 'register' ? 'Создать кабинет' : 'Войти'}<Heart size={18} /></button>
+          </form>
+          <button className="text-button auth-skip" type="button" onClick={onAnonymous}>Продолжить на этом телефоне без email</button>
+          <button className="text-button" type="button" onClick={onBack}>Назад</button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function JoinCouple({ error, onJoin, onBack }: { error?: string; onJoin: (code: string) => void; onBack: () => void }) {
@@ -407,9 +477,12 @@ function ChatView({ role, messages, onSend, onRead }: { role: Role; messages: Ch
   )
 }
 
-function SettingsView({ role, inviteCode, onSwitch }: { role: Role; inviteCode?: string; onSwitch: () => void }) {
+function SettingsView({ role, profile, onProtect, onSwitch }: { role: Role; profile: CloudProfile | null; onProtect: (email: string, password: string) => void; onSwitch: () => void }) {
   const [notificationStatus, setNotificationStatus] = useState(Notification.permission)
   const [installed, setInstalled] = useState(window.matchMedia('(display-mode: standalone)').matches)
+  const [showAccount, setShowAccount] = useState(false)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   async function askNotifications() {
     const status = await Notification.requestPermission()
     setNotificationStatus(status)
@@ -422,8 +495,14 @@ function SettingsView({ role, inviteCode, onSwitch }: { role: Role; inviteCode?:
         <button onClick={askNotifications}><span className="setting-icon"><BellRing /></span><span><strong>Уведомления</strong><small>{notificationStatus === 'granted' ? 'Включены' : notificationStatus === 'denied' ? 'Запрещены в браузере' : 'Получать новости о желаниях'}</small></span><em>{notificationStatus === 'granted' ? 'Вкл.' : 'Настроить'}</em></button>
         <button onClick={() => setInstalled(true)}><span className="setting-icon"><Upload /></span><span><strong>Установить приложение</strong><small>{installed ? 'Открывается как приложение' : 'Добавьте на домашний экран'}</small></span><em>{installed ? 'Готово' : 'Как?'}</em></button>
       </div>
+      {!isDemoMode && <div className="settings-group"><h3>Личный кабинет</h3>
+        {profile?.email && !profile.anonymous ? <div className="account-ready"><CircleUserRound /><span><strong>Вход защищён</strong><small>{profile.email}</small></span><CheckCircle2 /></div> : <>
+          <button onClick={() => setShowAccount((value) => !value)}><span className="setting-icon"><CircleUserRound /></span><span><strong>Добавить email и пароль</strong><small>Чтобы не потерять доступ при смене телефона</small></span><em>{showAccount ? 'Скрыть' : 'Настроить'}</em></button>
+          {showAccount && <form className="account-form" onSubmit={(event) => { event.preventDefault(); if (email.trim() && password.length >= 6) onProtect(email.trim().toLowerCase(), password) }}><label className="field"><span>Email</span><input type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} /></label><label className="field"><span>Пароль</span><input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Минимум 6 символов" /></label><button className="primary-button wide" disabled={!email.trim() || password.length < 6}>Сохранить кабинет</button></form>}
+        </>}
+      </div>}
       <div className="settings-group"><h3>Пара</h3><div className="pair-card"><span className="role-avatar wife">А</span><Heart size={18} fill="currentColor" /><span className="role-avatar husband">С</span><div><strong>Алла и Стас</strong><small>вместе в приложении</small></div></div></div>
-      {inviteCode && <button className="invite-code" onClick={() => { void navigator.clipboard?.writeText(inviteCode) }}><span><small>Код пары</small><strong>{inviteCode}</strong></span><em>Нажмите, чтобы скопировать</em></button>}
+      {profile?.inviteCode && <button className="invite-code" onClick={() => { void navigator.clipboard?.writeText(profile.inviteCode) }}><span><small>Код пары</small><strong>{profile.inviteCode}</strong></span><em>Нажмите, чтобы скопировать</em></button>}
       {isDemoMode && <div className="demo-note"><Sparkles /><div><strong>Сейчас включён демо-режим</strong><p>Все функции можно попробовать в этом браузере. Подключите Supabase по инструкции в README, чтобы синхронизировать два телефона.</p></div></div>}
       <button className="secondary-button switch-user" onClick={onSwitch}><UserRound size={18} />Сменить пользователя</button>
     </div>

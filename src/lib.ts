@@ -30,8 +30,8 @@ export function formatShortDate(value: string) {
   return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long' }).format(new Date(value))
 }
 
-export function uid(prefix: string) {
-  return `${prefix}_${crypto.randomUUID()}`
+export function uid(_prefix?: string) {
+  return crypto.randomUUID()
 }
 
 export async function fileToDataUrl(file: File): Promise<string> {
