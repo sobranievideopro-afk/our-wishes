@@ -1,15 +1,12 @@
-import { serve } from 'https://deno.land/std@0.224.0/http/server.ts'
-
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
 function meta(html: string, key: string) {
-  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const patterns = [
-    new RegExp(`<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["']`, 'i'),
-    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${escaped}["']`, 'i'),
+    new RegExp(`<meta[^>]+(?:property|name)=["']${key}["'][^>]+content=["']([^"']+)["']`, 'i'),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${key}["']`, 'i'),
   ]
   return patterns.map((pattern) => html.match(pattern)?.[1]).find(Boolean)
 }
@@ -18,7 +15,7 @@ function decode(value?: string) {
   return value?.replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;/g, "'").trim()
 }
 
-function assertSafeUrl(raw: string) {
+function safeUrl(raw: string) {
   const url = new URL(raw)
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported protocol')
   const host = url.hostname.toLowerCase()
@@ -26,11 +23,11 @@ function assertSafeUrl(raw: string) {
   return url
 }
 
-serve(async (request) => {
+Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: cors })
   try {
-    const { url: raw } = await request.json()
-    const url = assertSafeUrl(String(raw))
+    const body = await request.json()
+    const url = safeUrl(String(body.url))
     const response = await fetch(url, { headers: { 'user-agent': 'Mozilla/5.0 (compatible; OurWishes/1.0)' }, redirect: 'follow', signal: AbortSignal.timeout(8000) })
     if (!response.ok) throw new Error(`Source returned ${response.status}`)
     const html = (await response.text()).slice(0, 2_000_000)
