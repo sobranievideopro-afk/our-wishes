@@ -23,6 +23,8 @@ export interface Wish {
   likedByHusband?: boolean
   completionNote?: string
   isNewForHusband?: boolean
+  unreadComments?: number
+  unreadCommentRoles?: Role[]
 }
 
 export interface WishComment {
@@ -51,6 +53,7 @@ export interface CalendarEvent {
   time?: string
   note?: string
   emojis: string[]
+  color: 'family' | 'work'
   author: Role
   createdAt: string
 }

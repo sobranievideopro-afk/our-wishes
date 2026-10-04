@@ -12,8 +12,8 @@ import { categories } from './data'
 import { CalendarView } from './CalendarView'
 import { fileToDataUrl, formatPrice, formatShortDate, importFromLink, isDemoMode, loadDemoData, saveDemoData, supabase, uid } from './lib'
 import {
-  authenticateCloud, createCloudCouple, deleteCloudEvent, deleteCloudWish, enableCloudPush, fetchCloudData, insertCloudComment, insertCloudEvent, insertCloudMessage, insertCloudWish,
-  joinCloudCouple, linkCloudAccount, markCloudWishSeen, notifyPartner, restoreProfile, setCloudCompleted, setCloudLike, setCloudMessageLike, setCloudReservation,
+  authenticateCloud, createCloudCouple, deleteCloudEvent, deleteCloudMessage, deleteCloudWish, enableCloudPush, fetchCloudData, insertCloudComment, insertCloudEvent, insertCloudMessage, insertCloudWish,
+  joinCloudCouple, linkCloudAccount, markCloudCommentsSeen, markCloudWishSeen, notifyPartner, restoreProfile, setCloudCompleted, setCloudLike, setCloudMessageLike, setCloudReservation,
   signOutCloud, subscribeToCloud, updateCloudEvent, updateCloudProfile, updateCloudWish, type AuthMode, type CloudProfile,
 } from './cloud'
 import type { AppData, CalendarEvent, CategoryId, ChatMessage, MemberProfile, Role, Tab, Wish } from './types'
@@ -44,8 +44,12 @@ function loadDemoProfiles(): Record<Role, ProfileView> {
 
 function initialFor(name: string) { return name.trim().charAt(0).toLocaleUpperCase('ru') || '♡' }
 
-function UserAvatar({ displayName, avatar, className = '' }: ProfileView & { className?: string }) {
-  return <span className={`user-avatar ${className}`}>{avatar ? <img src={avatar} alt="" loading="lazy" decoding="async" /> : initialFor(displayName)}</span>
+function UserAvatar({ displayName, avatar, className = '', onOpen }: ProfileView & { className?: string; onOpen?: () => void }) {
+  return <span className={`user-avatar ${className} ${avatar && onOpen ? 'clickable' : ''}`} role={avatar && onOpen ? 'button' : undefined} tabIndex={avatar && onOpen ? 0 : undefined} aria-label={avatar && onOpen ? `Открыть фото ${displayName}` : undefined} onClick={avatar ? onOpen : undefined} onKeyDown={(event) => { if (avatar && onOpen && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); onOpen() } }}>{avatar ? <img src={avatar} alt="" loading="lazy" decoding="async" /> : initialFor(displayName)}</span>
+}
+
+function AvatarViewer({ profile, onClose }: { profile: MemberProfile; onClose: () => void }) {
+  return <div className="avatar-viewer" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div><button aria-label="Закрыть фото" onClick={onClose}><X /></button>{profile.avatar ? <img src={profile.avatar} alt={profile.displayName} /> : <span>{initialFor(profile.displayName)}</span>}<strong>{profile.displayName}</strong></div></div>
 }
 
 function ImageCropper({ source, aspect, onCancel, onDone }: { source: string; aspect: number; onCancel: () => void; onDone: (value: string) => void }) {
@@ -232,9 +236,11 @@ function App() {
 
   function openWish(id: string) {
     setSelectedWishId(id)
-    if (role !== 'husband') return
-    setData((current) => ({ ...current, wishes: current.wishes.map((wish) => wish.id === id ? { ...wish, isNewForHusband: false } : wish) }))
-    if (cloudProfile) markCloudWishSeen(id, cloudProfile).catch(() => undefined)
+    setData((current) => ({ ...current, wishes: current.wishes.map((wish) => wish.id === id ? { ...wish, unreadComments: 0, unreadCommentRoles: wish.unreadCommentRoles?.filter((item) => item !== role), ...(role === 'husband' ? { isNewForHusband: false } : {}) } : wish) }))
+    if (cloudProfile) {
+      markCloudCommentsSeen(id, cloudProfile).catch(() => undefined)
+      if (role === 'husband') markCloudWishSeen(id, cloudProfile).catch(() => undefined)
+    }
   }
 
   async function saveWish(wish: Wish) {
@@ -277,7 +283,8 @@ function App() {
   function addComment(wishId: string, text: string) {
     if (!role || !text.trim()) return
     const comment = { id: uid('comment'), wishId, author: role, text: text.trim(), createdAt: new Date().toISOString() }
-    setData((current) => ({ ...current, comments: [...current.comments, comment] }))
+    const recipient: Role = role === 'wife' ? 'husband' : 'wife'
+    setData((current) => ({ ...current, comments: [...current.comments, comment], wishes: current.wishes.map((wish) => wish.id === wishId ? { ...wish, unreadCommentRoles: Array.from(new Set([...(wish.unreadCommentRoles || []), recipient])) } : wish) }))
     if (cloudProfile) insertCloudComment(comment, cloudProfile).catch(() => setToast('Комментарий не отправлен. Проверьте интернет.'))
   }
 
@@ -298,6 +305,14 @@ function App() {
     const liked = !message.likedByMe
     setData((current) => ({ ...current, messages: current.messages.map((item) => item.id === id ? { ...item, likedByMe: liked, likeCount: Math.max(0, (item.likeCount || 0) + (liked ? 1 : -1)) } : item) }))
     if (cloudProfile) setCloudMessageLike(id, liked, cloudProfile).catch(() => { setToast('Не удалось поставить лайк'); fetchCloudData(cloudProfile).then(setData) })
+  }
+
+  async function removeMessage(id: string) {
+    const previous = data.messages
+    setData((current) => ({ ...current, messages: current.messages.filter((message) => message.id !== id) }))
+    if (!cloudProfile) { setToast('Сообщение удалено'); return }
+    try { await deleteCloudMessage(id); setToast('Сообщение удалено') }
+    catch { setData((current) => ({ ...current, messages: previous })); setToast('Не удалось удалить сообщение') }
   }
 
   function addEvent(event: CalendarEvent) {
@@ -350,7 +365,7 @@ function App() {
         {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={openWish} />}
         {activeTab === 'calendar' && <CalendarView events={data.events} wishes={data.wishes} role={role} onAdd={addEvent} onUpdate={editEvent} onDelete={deleteEvent} onOpenWish={openWish} />}
         {activeTab === 'done' && <DoneView wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={openWish} />}
-        {activeTab === 'chat' && <ChatView role={role} members={chatMembers} messages={data.messages} onSend={addMessage} onLike={toggleMessageLike} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
+        {activeTab === 'chat' && <ChatView role={role} members={chatMembers} messages={data.messages} onSend={addMessage} onLike={toggleMessageLike} onDelete={removeMessage} onRead={() => setData((current) => ({ ...current, messages: current.messages.map((m) => ({ ...m, read: true })) }))} />}
         {activeTab === 'settings' && <SettingsView role={role} profile={cloudProfile} profileView={currentProfile} onUpdateProfile={saveProfile} onProtect={protectAccount} onSwitch={() => setRole(null)} onToast={setToast} />}
       </main>
 
@@ -547,6 +562,7 @@ function WishesView({ data, role, onOpen, onAdd, onPatch }: {
 
 function WishCard({ wish, role, onOpen, onPatch }: { wish: Wish; role: Role; onOpen: () => void; onPatch: (patch: Partial<Wish>) => void }) {
   const category = categories.find((item) => item.id === wish.categories[0])
+  const unreadComments = wish.unreadComments || (wish.unreadCommentRoles?.includes(role) ? 1 : 0)
   return (
     <article className={`wish-card ${role === 'husband' && wish.isNewForHusband ? 'new-wish' : ''}`} onClick={onOpen}>
       <div className="wish-image-wrap">
@@ -562,7 +578,7 @@ function WishCard({ wish, role, onOpen, onPatch }: { wish: Wish; role: Role; onO
       </div>
       <div className="wish-card-body">
         <div className="stars" aria-label={`${wish.stars} из 5`}>{[1,2,3,4,5].map((n) => <Star key={n} size={12} fill={n <= wish.stars ? 'currentColor' : 'none'} />)}</div>
-        <h3>{wish.title}</h3>
+        <div className="wish-card-title"><h3>{wish.title}</h3>{unreadComments > 0 && <span className="comment-alert" aria-label={`Новых комментариев: ${unreadComments}`}><MessageCircle size={14} />{unreadComments}</span>}</div>
         <div className="card-meta"><strong>{formatPrice(wish.price)}</strong><span className={wish.targetDate ? 'target-date' : ''}>{wish.targetDate ? `До ${formatTargetDate(wish.targetDate)}` : formatShortDate(wish.createdAt)}</span></div>
       </div>
     </article>
@@ -592,9 +608,11 @@ function DoneView({ wishes, onOpen }: { wishes: Wish[]; onOpen: (id: string) => 
   return <div className="page"><section className="hero-row"><div><p className="eyebrow">Ваша история</p><h1>Исполненные мечты</h1></div><div className="wish-count complete"><strong>{wishes.length}</strong><span>сбылось</span></div></section>{wishes.length ? <div className="completed-list">{wishes.map((wish) => <button key={wish.id} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt="" loading="lazy" decoding="async" /> : <div className="thumb-placeholder"><Gift /></div>}<span><small>Исполнено {formatShortDate(wish.completedAt!)}</small><strong>{wish.title}</strong><em>{wish.completionNote || 'Ещё одна мечта стала реальностью'}</em></span><CheckCircle2 /></button>)}</div> : <EmptyState icon={<CheckCircle2 />} title="Здесь появится ваша история" text="Когда желание исполнится, оно останется здесь тёплым воспоминанием." />}</div>
 }
 
-function ChatView({ role, members, messages, onSend, onLike, onRead }: { role: Role; members: Record<Role, MemberProfile>; messages: ChatMessage[]; onSend: (message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) => void; onLike: (id: string) => void; onRead: () => void }) {
+function ChatView({ role, members, messages, onSend, onLike, onDelete, onRead }: { role: Role; members: Record<Role, MemberProfile>; messages: ChatMessage[]; onSend: (message: Omit<ChatMessage, 'id' | 'createdAt' | 'read'>) => void; onLike: (id: string) => void; onDelete: (id: string) => void; onRead: () => void }) {
   const [text, setText] = useState('')
   const [cropSource, setCropSource] = useState<string | null>(null)
+  const [viewedAvatar, setViewedAvatar] = useState<MemberProfile | null>(null)
+  const [deleteCandidate, setDeleteCandidate] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const partnerRole: Role = role === 'wife' ? 'husband' : 'wife'
@@ -612,15 +630,15 @@ function ChatView({ role, members, messages, onSend, onLike, onRead }: { role: R
   }
   return (
     <div className="chat-page">
-      <div className="chat-head"><div className="couple-avatars"><UserAvatar {...members[partnerRole]} /><UserAvatar {...members[role]} /></div><div><h1>Только мы</h1><p><i /> {members.wife.displayName} и {members.husband.displayName}</p></div><button><MoreHorizontal /></button></div>
+      <div className="chat-head"><div className="couple-avatars"><UserAvatar {...members[partnerRole]} onOpen={() => setViewedAvatar(members[partnerRole])} /><UserAvatar {...members[role]} onOpen={() => setViewedAvatar(members[role])} /></div><div><h1>Только мы</h1><p><i /> {members.wife.displayName} и {members.husband.displayName}</p></div><button><MoreHorizontal /></button></div>
       <div className="messages">
         <div className="chat-date">Сегодня</div>
         {messages.map((message, index) => {
           const own = message.author === role
           const showAvatar = !own && messages[index + 1]?.author !== message.author
           return <div key={message.id} className={`message-row ${own ? 'own' : ''}`}>
-            {!own && <UserAvatar {...members[message.author]} className={`message-avatar ${showAvatar ? '' : 'hidden'}`} />}
-            <div className="message-wrap"><div className="message-bubble">{message.image && <img src={message.image} alt="Отправленное фото" loading="lazy" decoding="async" />}{message.text && <p>{message.text}</p>}<time>{new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(message.createdAt))}{own && <Check size={12} />}</time></div><button className={`message-like ${message.likedByMe ? 'liked' : ''}`} aria-label="Лайкнуть сообщение" onClick={() => onLike(message.id)}><Heart size={13} fill={message.likedByMe ? 'currentColor' : 'none'} />{Boolean(message.likeCount) && <span>{message.likeCount}</span>}</button></div>
+            {!own && <UserAvatar {...members[message.author]} className={`message-avatar ${showAvatar ? '' : 'hidden'}`} onOpen={showAvatar ? () => setViewedAvatar(members[message.author]) : undefined} />}
+            <div className="message-wrap"><div className="message-bubble">{message.image && <img src={message.image} alt="Отправленное фото" loading="lazy" decoding="async" />}{message.text && <p>{message.text}</p>}<time>{new Intl.DateTimeFormat('ru-RU', { hour: '2-digit', minute: '2-digit' }).format(new Date(message.createdAt))}{own && <Check size={12} />}</time></div><div className="message-actions"><button className={`message-like ${message.likedByMe ? 'liked' : ''}`} aria-label="Лайкнуть сообщение" onClick={() => onLike(message.id)}><Heart size={13} fill={message.likedByMe ? 'currentColor' : 'none'} />{Boolean(message.likeCount) && <span>{message.likeCount}</span>}</button>{own && (deleteCandidate === message.id ? <><button className="message-delete confirm" onClick={() => { onDelete(message.id); setDeleteCandidate(null) }}>Удалить</button><button className="message-delete cancel" onClick={() => setDeleteCandidate(null)}>Отмена</button></> : <button className="message-delete" aria-label="Удалить сообщение" onClick={() => setDeleteCandidate(message.id)}><Trash2 size={13} /></button>)}</div></div>
           </div>
         })}
         <div ref={bottomRef} />
@@ -632,6 +650,7 @@ function ChatView({ role, members, messages, onSend, onLike, onRead }: { role: R
         <button className="send-button" type="submit" disabled={!text.trim()}><Send size={19} /></button>
       </form>
       {cropSource && <ImageCropper source={cropSource} aspect={4 / 3} onCancel={() => setCropSource(null)} onDone={(image) => { onSend({ author: role, image }); setCropSource(null) }} />}
+      {viewedAvatar && <AvatarViewer profile={viewedAvatar} onClose={() => setViewedAvatar(null)} />}
     </div>
   )
 }
@@ -648,6 +667,7 @@ function SettingsView({ role, profile, profileView, onUpdateProfile, onProtect, 
   const [profileAvatar, setProfileAvatar] = useState(profileView.avatar)
   const [avatarCropSource, setAvatarCropSource] = useState<string | null>(null)
   const [profileSaving, setProfileSaving] = useState(false)
+  const [viewedAvatar, setViewedAvatar] = useState<MemberProfile | null>(null)
   const avatarGalleryId = useId()
   const avatarCameraId = useId()
   async function chooseAvatar(file?: File) { if (file) setAvatarCropSource(await fileToDataUrl(file)) }
@@ -666,13 +686,14 @@ function SettingsView({ role, profile, profileView, onUpdateProfile, onProtect, 
   return (
     <div className="page settings-page">
       <section className="hero-row"><div><p className="eyebrow">Ваше пространство</p><h1>Настройки</h1></div></section>
-      <div className="profile-card"><UserAvatar {...profileView} className="profile-avatar" /><div><h2>{profileView.displayName}</h2><p>{role === 'wife' ? 'Добавляет мечты' : 'Исполняет мечты'}</p></div><button className="profile-edit" onClick={() => { setProfileName(profileView.displayName); setProfileAvatar(profileView.avatar); setEditingProfile((value) => !value) }}><Pencil size={15} />{editingProfile ? 'Закрыть' : 'Изменить'}</button></div>
+      <div className="profile-card"><UserAvatar {...profileView} className="profile-avatar" onOpen={() => setViewedAvatar(profileView)} /><div><h2>{profileView.displayName}</h2><p>{role === 'wife' ? 'Добавляет мечты' : 'Исполняет мечты'}</p></div><button className="profile-edit" onClick={() => { setProfileName(profileView.displayName); setProfileAvatar(profileView.avatar); setEditingProfile((value) => !value) }}><Pencil size={15} />{editingProfile ? 'Закрыть' : 'Изменить'}</button></div>
       {editingProfile && <form className="profile-editor" onSubmit={async (event) => { event.preventDefault(); if (!profileName.trim()) return; setProfileSaving(true); await onUpdateProfile(profileName, profileAvatar); setProfileSaving(false); setEditingProfile(false) }}>
         <div className="profile-photo-edit"><UserAvatar displayName={profileName || profileView.displayName} avatar={profileAvatar} className="profile-avatar large" /><div><strong>Фото профиля</strong><span>Можно выбрать из галереи или снять новое</span><div className="profile-photo-actions"><label htmlFor={avatarGalleryId}><ImageIcon size={15} />Галерея</label><label htmlFor={avatarCameraId}><Camera size={15} />Камера</label>{profileAvatar && <button type="button" onClick={() => setProfileAvatar(undefined)}>Убрать</button>}</div></div><input id={avatarGalleryId} className="file-input" type="file" accept="image/*" onChange={(event) => { void chooseAvatar(event.target.files?.[0]); event.currentTarget.value = '' }} /><input id={avatarCameraId} className="file-input" type="file" accept="image/*" capture="environment" onChange={(event) => { void chooseAvatar(event.target.files?.[0]); event.currentTarget.value = '' }} /></div>
         <label className="field"><span>Имя</span><input value={profileName} maxLength={80} onChange={(event) => setProfileName(event.target.value)} placeholder={role === 'wife' ? 'Алла' : 'Стас'} /></label>
         <button className="primary-button wide" disabled={!profileName.trim() || profileSaving}>{profileSaving ? <LoaderCircle className="spin" size={17} /> : <Check size={17} />}{profileSaving ? 'Сохраняем…' : 'Сохранить профиль'}</button>
       </form>}
       {avatarCropSource && <ImageCropper source={avatarCropSource} aspect={1} onCancel={() => setAvatarCropSource(null)} onDone={(image) => { setProfileAvatar(image); setAvatarCropSource(null) }} />}
+      {viewedAvatar && <AvatarViewer profile={viewedAvatar} onClose={() => setViewedAvatar(null)} />}
       <div className="settings-group"><h3>Приложение</h3>
         <button onClick={askNotifications} disabled={notificationLoading}><span className="setting-icon"><BellRing /></span><span><strong>Пуш-уведомления</strong><small>{notificationStatus === 'granted' ? 'Новые желания и сообщения' : notificationStatus === 'denied' ? 'Запрещены в настройках телефона' : notificationStatus === 'unsupported' ? 'Установите приложение на экран Домой' : 'Включить на этом телефоне'}</small></span><em>{notificationLoading ? '…' : notificationStatus === 'granted' ? 'Вкл.' : 'Настроить'}</em></button>
         <button onClick={() => setInstalled(true)}><span className="setting-icon"><Upload /></span><span><strong>Установить приложение</strong><small>{installed ? 'Открывается как приложение' : 'Добавьте на домашний экран'}</small></span><em>{installed ? 'Готово' : 'Как?'}</em></button>
@@ -787,7 +808,7 @@ function WishDetail({ wish, role, comments, onClose, onPatch, onComment, onToast
         {wish.details && <div className="detail-note"><Sparkles size={17} /><div><strong>Важные детали</strong><p>{wish.details}</p></div></div>}
         {wish.link && <a className="shop-link" href={wish.link} target="_blank" rel="noreferrer"><Link2 size={18} /><span><strong>Открыть исходную ссылку</strong><small>{safeHost(wish.link)}</small></span><ExternalLink size={17} /></a>}
         {role === 'husband' && !completed && <button className={`reserve-button ${wish.reservedByHusband ? 'selected' : ''}`} onClick={() => { onPatch({ reservedByHusband: !wish.reservedByHusband }); onToast(wish.reservedByHusband ? 'Выбор отменён' : 'Сохранено только для вас') }}>{wish.reservedByHusband ? <><CheckCircle2 />Вы выбрали это желание</> : <><Gift />Хочу исполнить</>}<small>{wish.reservedByHusband ? 'Жена не видит эту отметку' : 'Отметка будет видна только вам'}</small></button>}
-        {role === 'wife' && !completed && <button className="complete-button" onClick={() => { onPatch({ completedAt: new Date().toISOString() }); onToast('Мечта исполнена 🤍') }}><CheckCircle2 size={20} />Отметить исполненным</button>}
+        {role === 'wife' && !completed && <button className="complete-button" onClick={() => { onPatch({ completedAt: new Date().toISOString() }); onToast('Мечта исполнена 🤍') }}><CheckCircle2 size={20} />Желание исполнено</button>}
         {role === 'wife' && completed && <button className="secondary-button wide" onClick={() => onPatch({ completedAt: undefined })}>Вернуть в актуальные</button>}
         {role === 'wife' && <div className="wish-owner-actions"><button className="secondary-button" onClick={onEdit}><Pencil size={16} />Редактировать</button>{confirmDelete ? <><button className="danger-button" onClick={onDelete}><Trash2 size={16} />Удалить точно</button><button className="text-button" onClick={() => setConfirmDelete(false)}>Отмена</button></> : <button className="delete-link" onClick={() => setConfirmDelete(true)}><Trash2 size={16} />Удалить</button>}</div>}
         <section className="comments-section"><div className="section-title"><h3>Комментарии</h3><span>{comments.length}</span></div>

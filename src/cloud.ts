@@ -129,7 +129,7 @@ async function mediaUrl(path?: string | null) {
 
 export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
   const api = client()
-  const [wishesResult, commentsResult, likesResult, reservationsResult, messagesResult, profilesResult, eventsResult, messageLikesResult, wishViewsResult] = await Promise.all([
+  const [wishesResult, commentsResult, likesResult, reservationsResult, messagesResult, profilesResult, eventsResult, messageLikesResult, wishViewsResult, commentViewsResult] = await Promise.all([
     retryResult(() => api.from('wishes').select('*').eq('couple_id', profile.coupleId).order('created_at', { ascending: false })),
     retryResult(() => api.from('wish_comments').select('*').order('created_at')),
     retryResult(() => api.from('wish_likes').select('*')),
@@ -139,6 +139,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     retryResult(() => api.from('couple_events').select('*').eq('couple_id', profile.coupleId).order('event_date')),
     retryResult(() => api.from('message_likes').select('*')),
     profile.role === 'husband' ? retryResult(() => api.from('wish_views').select('wish_id').eq('user_id', profile.id)) : Promise.resolve({ data: [] }),
+    retryResult(() => api.from('wish_comment_views').select('wish_id,viewed_at').eq('user_id', profile.id)),
   ])
   const profileRows = profilesResult.data || []
   const roleById = new Map(profileRows.map((item: any) => [item.id, item.role as Role]))
@@ -151,6 +152,8 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
   const reservedIds = new Set((reservationsResult.data || []).map((item: any) => item.wish_id))
   const messageLikeRows = messageLikesResult.data || []
   const viewedWishIds = new Set((wishViewsResult.data || []).map((item: any) => item.wish_id))
+  const commentViewedAt = new Map<string, number>((commentViewsResult.data || []).map((item: any) => [item.wish_id, new Date(item.viewed_at).getTime()]))
+  const commentRows = commentsResult.data || []
 
   const wishes: Wish[] = await Promise.all((wishesResult.data || []).map(async (row: any) => ({
     id: row.id,
@@ -169,10 +172,11 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     likedByHusband: likedIds.has(row.id),
     reservedByHusband: reservedIds.has(row.id),
     isNewForHusband: profile.role === 'husband' && !viewedWishIds.has(row.id),
+    unreadComments: commentRows.filter((comment: any) => comment.wish_id === row.id && comment.author_id !== profile.id && new Date(comment.created_at).getTime() > (commentViewedAt.get(row.id) || 0)).length,
   })))
-  const comments: WishComment[] = (commentsResult.data || []).map((row: any) => ({ id: row.id, wishId: row.wish_id, author: roleById.get(row.author_id) || 'wife', text: row.text, createdAt: row.created_at }))
+  const comments: WishComment[] = commentRows.map((row: any) => ({ id: row.id, wishId: row.wish_id, author: roleById.get(row.author_id) || 'wife', text: row.text, createdAt: row.created_at }))
   const messages: ChatMessage[] = await Promise.all((messagesResult.data || []).map(async (row: any) => ({ id: row.id, author: roleById.get(row.author_id) || 'wife', text: row.text || undefined, image: await mediaUrl(row.image_path), createdAt: row.created_at, read: true, likedByMe: messageLikeRows.some((like: any) => like.message_id === row.id && like.user_id === profile.id), likeCount: messageLikeRows.filter((like: any) => like.message_id === row.id).length })))
-  const events: CalendarEvent[] = (eventsResult.data || []).map((row: any) => ({ id: row.id, title: row.title, date: row.event_date, time: row.event_time?.slice(0, 5) || undefined, note: row.note || undefined, emojis: row.emojis || [], author: roleById.get(row.author_id) || 'wife', createdAt: row.created_at }))
+  const events: CalendarEvent[] = (eventsResult.data || []).map((row: any) => ({ id: row.id, title: row.title, date: row.event_date, time: row.event_time?.slice(0, 5) || undefined, note: row.note || undefined, emojis: row.emojis || [], color: row.event_color === 'work' ? 'work' : 'family', author: roleById.get(row.author_id) || 'wife', createdAt: row.created_at }))
   return { wishes, comments, messages, events, members }
 }
 
@@ -248,6 +252,10 @@ export async function insertCloudComment(comment: WishComment, profile: CloudPro
   await retryResult(() => client().from('wish_comments').insert({ id: comment.id, wish_id: comment.wishId, author_id: profile.id, text: comment.text }))
 }
 
+export async function markCloudCommentsSeen(wishId: string, profile: CloudProfile) {
+  await retryResult(() => client().from('wish_comment_views').upsert({ wish_id: wishId, user_id: profile.id, viewed_at: new Date().toISOString() }, { onConflict: 'wish_id,user_id' }))
+}
+
 export async function setCloudLike(wishId: string, liked: boolean, profile: CloudProfile) {
   await retryResult(() => liked
     ? client().from('wish_likes').insert({ wish_id: wishId, user_id: profile.id })
@@ -269,6 +277,10 @@ export async function insertCloudMessage(message: ChatMessage, profile: CloudPro
   await retryResult(() => client().from('messages').insert({ id: message.id, couple_id: profile.coupleId, author_id: profile.id, text: message.text, image_path: imagePath }))
 }
 
+export async function deleteCloudMessage(messageId: string) {
+  await retryResult(() => client().from('messages').delete().eq('id', messageId))
+}
+
 export async function setCloudMessageLike(messageId: string, liked: boolean, profile: CloudProfile) {
   await retryResult(() => liked
     ? client().from('message_likes').insert({ message_id: messageId, user_id: profile.id })
@@ -276,11 +288,11 @@ export async function setCloudMessageLike(messageId: string, liked: boolean, pro
 }
 
 export async function insertCloudEvent(event: CalendarEvent, profile: CloudProfile) {
-  await retryResult(() => client().from('couple_events').insert({ id: event.id, couple_id: profile.coupleId, author_id: profile.id, title: event.title, event_date: event.date, event_time: event.time, emojis: event.emojis, note: event.note }))
+  await retryResult(() => client().from('couple_events').insert({ id: event.id, couple_id: profile.coupleId, author_id: profile.id, title: event.title, event_date: event.date, event_time: event.time, emojis: event.emojis, event_color: event.color, note: event.note }))
 }
 
 export async function updateCloudEvent(event: CalendarEvent) {
-  await retryResult(() => client().from('couple_events').update({ title: event.title, event_date: event.date, event_time: event.time || null, emojis: event.emojis, note: event.note || null, updated_at: new Date().toISOString() }).eq('id', event.id))
+  await retryResult(() => client().from('couple_events').update({ title: event.title, event_date: event.date, event_time: event.time || null, emojis: event.emojis, event_color: event.color, note: event.note || null, updated_at: new Date().toISOString() }).eq('id', event.id))
 }
 
 export async function deleteCloudEvent(eventId: string) {
@@ -322,6 +334,7 @@ export function subscribeToCloud(profile: CloudProfile, refresh: () => void): Re
     .on('postgres_changes', { event: '*', schema: 'public', table: 'couple_events', filter: `couple_id=eq.${profile.coupleId}` }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'message_likes' }, refresh)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'wish_views' }, refresh)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'wish_comment_views' }, refresh)
     .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `couple_id=eq.${profile.coupleId}` }, refresh)
     .subscribe()
 }
