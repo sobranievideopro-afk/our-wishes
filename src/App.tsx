@@ -1,10 +1,10 @@
 import { lazy, Suspense, useEffect, useId, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import {
-  Bell, BellRing, Building2, CalendarDays, Camera, Car, Check, CheckCircle2, ChevronLeft, Crop,
+  BellRing, Building2, CalendarDays, Camera, Car, Check, CheckCircle2, ChevronLeft, Crop,
   CircleUserRound, Compass, ExternalLink, Filter, Flower2, Gem, Gift, Heart,
   HeartHandshake, House, Image as ImageIcon, Link2, LoaderCircle, MapPin,
   LayoutGrid, MapPinned, MessageCircle, MoreHorizontal, Paperclip, Plane, Plus, RectangleHorizontal, RefreshCcw, Search, Send,
-  Pencil, Settings, Share2, Shuffle, SlidersHorizontal, Sparkles, Star, Trash2, TreePine, Video,
+  Pencil, Share2, SlidersHorizontal, Sparkles, Star, Trash2, TreePine, Video,
   Upload, UserRound, X, ZoomIn,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
@@ -25,11 +25,11 @@ const iconMap: Record<string, LucideIcon> = {
 
 const navItems: { id: Tab; label: string; icon: LucideIcon }[] = [
   { id: 'wishes', label: 'Желания', icon: Heart },
-  { id: 'moodboard', label: 'Лента', icon: Sparkles },
   { id: 'location', label: 'Карта', icon: MapPinned },
   { id: 'calendar', label: 'Календарь', icon: CalendarDays },
   { id: 'chat', label: 'Чат', icon: MessageCircle },
   { id: 'done', label: 'Сбылось', icon: CheckCircle2 },
+  { id: 'settings', label: 'Профиль', icon: UserRound },
 ]
 
 const LocationMapView = lazy(() => import('./LocationMapView').then((module) => ({ default: module.LocationMapView })))
@@ -244,7 +244,7 @@ function App() {
       setCloudProfile((current) => current ? { ...current, status: value || undefined } : current)
       try {
         await updateCloudStatus(value)
-        void notifyPartner('status', value || `${cloudProfile.displayName} убрал(а) статус`, `${location.origin}${location.pathname}`)
+        void notifyPartner('status', value || `${cloudProfile.displayName} убрал(а) статус`, `${location.origin}${location.pathname}`).catch(() => setToast('Статус сохранён, но push не отправлен'))
       } catch {
         setData((current) => ({ ...current, members: { ...current.members, [role]: previous } }))
         setCloudProfile((current) => current ? { ...current, status: previous.status } : current)
@@ -437,9 +437,6 @@ function App() {
   const newWishCount = role === 'husband' ? data.wishes.filter((wish) => wish.isNewForHusband && !wish.completedAt).length : 0
   const currentProfile = cloudProfile ? { displayName: cloudProfile.displayName || defaultProfiles[role].displayName, avatar: cloudProfile.avatar, status: cloudProfile.status, latitude: cloudProfile.latitude, longitude: cloudProfile.longitude, locationUpdatedAt: cloudProfile.locationUpdatedAt } : demoProfiles[role]
   const chatMembers: Record<Role, MemberProfile> = { ...(isDemoMode ? demoProfiles : data.members), [role]: currentProfile }
-  const partnerRole: Role = role === 'wife' ? 'husband' : 'wife'
-  const partnerProfile = chatMembers[partnerRole]
-
   return (
     <div className="app-shell">
       <header className="topbar">
@@ -449,15 +446,22 @@ function App() {
         </div>
         <div className="top-actions">
           {isDemoMode && <span className="demo-badge">Демо</span>}
-          {partnerProfile.status && <button className="top-status-bubble" onClick={() => setActiveTab('chat')}><span>{partnerProfile.status}</span><small>{partnerProfile.displayName}</small></button>}
-          <button className="icon-button" aria-label="Уведомления" onClick={() => setActiveTab('settings')}><Bell size={20} /></button>
-          <button className="avatar" aria-label="Профиль" onClick={() => setActiveTab('settings')}><UserAvatar {...currentProfile} /></button>
+          <div className="top-couple" aria-label="Алла и Стас">
+            <button className="top-member wife" onClick={() => setActiveTab(role === 'wife' ? 'settings' : 'chat')} aria-label={`${chatMembers.wife.displayName}: ${chatMembers.wife.status || 'без статуса'}`}>
+              <span className={`top-member-status ${chatMembers.wife.status ? '' : 'empty'}`}>{chatMembers.wife.status || chatMembers.wife.displayName}</span>
+              <span className="top-couple-avatar"><UserAvatar {...chatMembers.wife} /></span>
+            </button>
+            <Heart className="top-couple-heart" size={17} fill="currentColor" />
+            <button className="top-member husband" onClick={() => setActiveTab(role === 'husband' ? 'settings' : 'chat')} aria-label={`${chatMembers.husband.displayName}: ${chatMembers.husband.status || 'без статуса'}`}>
+              <span className="top-couple-avatar"><UserAvatar {...chatMembers.husband} /></span>
+              <span className={`top-member-status ${chatMembers.husband.status ? '' : 'empty'}`}>{chatMembers.husband.status || chatMembers.husband.displayName}</span>
+            </button>
+          </div>
         </div>
       </header>
 
       <main className="main-content">
         {activeTab === 'wishes' && <WishesView data={data} role={role} onOpen={openWish} onAdd={() => setShowAdd(true)} onPatch={patchWish} />}
-        {activeTab === 'moodboard' && <MoodboardView wishes={data.wishes.filter((wish) => !wish.completedAt)} onOpen={openWish} />}
         {activeTab === 'location' && <Suspense fallback={<div className="map-loading"><LoaderCircle className="spin" /><span>Открываем карту…</span></div>}><LocationMapView role={role} members={chatMembers} updating={locationUpdating} onUpdate={requestLocation} onStop={() => void stopLocation()} /></Suspense>}
         {activeTab === 'calendar' && <CalendarView events={data.events} wishes={data.wishes} role={role} onAdd={addEvent} onUpdate={editEvent} onDelete={deleteEvent} onOpenWish={openWish} />}
         {activeTab === 'done' && <DoneView role={role} wishes={data.wishes.filter((wish) => wish.completedAt)} onOpen={openWish} />}
@@ -477,7 +481,7 @@ function App() {
         })}
       </nav>
 
-      {role === 'wife' && ['wishes', 'moodboard', 'done'].includes(activeTab) && (
+      {role === 'wife' && ['wishes', 'done'].includes(activeTab) && (
         <button className="floating-add" aria-label="Добавить желание" onClick={() => setShowAdd(true)}><Plus size={22} /><span>Добавить</span></button>
       )}
 
@@ -684,25 +688,6 @@ function WishCard({ wish, role, onOpen, onPatch }: { wish: Wish; role: Role; onO
   )
 }
 
-function MoodboardView({ wishes, onOpen }: { wishes: Wish[]; onOpen: (id: string) => void }) {
-  const [shuffled, setShuffled] = useState(wishes)
-  const [category, setCategory] = useState<CategoryId | 'all'>('all')
-  useEffect(() => setShuffled(wishes), [wishes])
-  const visible = shuffled.filter((wish) => category === 'all' || wish.categories.includes(category))
-  return (
-    <div className="page moodboard-page">
-      <section className="centered-head"><p className="eyebrow">Ваша общая карта</p><h1>Мечты в картинках</h1><p>Иногда достаточно просто посмотреть, чтобы снова захотеть.</p></section>
-      <div className="moodboard-tools">
-        <select value={category} onChange={(e) => setCategory(e.target.value as CategoryId | 'all')}><option value="all">Все разделы</option>{categories.map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select>
-        <button onClick={() => setShuffled([...shuffled].sort(() => Math.random() - .5))}><Shuffle size={17} />Перемешать</button>
-      </div>
-      <div className="masonry">
-        {visible.map((wish, index) => <button key={wish.id} className={`masonry-item tone-${index % 4}`} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt={wish.title} loading="lazy" decoding="async" /> : <Gift size={34} />}<span><small>{categories.find((c) => c.id === wish.categories[0])?.label}</small><strong>{wish.title}</strong></span></button>)}
-      </div>
-    </div>
-  )
-}
-
 function DoneView({ role, wishes, onOpen }: { role: Role; wishes: Wish[]; onOpen: (id: string) => void }) {
   const total = wishes.reduce((sum, wish) => sum + (wish.price || 0), 0)
   return <div className="page"><section className="hero-row"><div><p className="eyebrow">Ваша история</p><h1>Исполненные мечты</h1></div><div className="done-summary"><div className="wish-count complete"><strong>{wishes.length}</strong><span>сбылось</span></div>{role === 'husband' && <div className="completed-total"><small>Общая сумма</small><strong>{formatPrice(total)}</strong></div>}</div></section>{wishes.length ? <div className="completed-list">{wishes.map((wish) => <button key={wish.id} onClick={() => onOpen(wish.id)}>{wish.image ? <img src={wish.image} alt="" loading="lazy" decoding="async" /> : <div className="thumb-placeholder"><Gift /></div>}<span><small>Исполнено {formatShortDate(wish.completedAt!)}</small><strong>{wish.title}</strong><em>{wish.completionNote || 'Ещё одна мечта стала реальностью'}</em></span><CheckCircle2 /></button>)}</div> : <EmptyState icon={<CheckCircle2 />} title="Здесь появится ваша история" text="Когда желание исполнится, оно останется здесь тёплым воспоминанием." />}</div>
@@ -771,10 +756,18 @@ function SettingsView({ role, profile, profileView, onUpdateProfile, onUpdateSta
   const [avatarCropSource, setAvatarCropSource] = useState<string | null>(null)
   const [profileSaving, setProfileSaving] = useState(false)
   const [viewedAvatar, setViewedAvatar] = useState<MemberProfile | null>(null)
-  const [customStatus, setCustomStatus] = useState('')
+  const [statusDraft, setStatusDraft] = useState(profileView.status || '')
+  const [statusSaving, setStatusSaving] = useState(false)
   const avatarGalleryId = useId()
   const avatarCameraId = useId()
+  useEffect(() => setStatusDraft(profileView.status || ''), [profileView.status])
   async function chooseAvatar(file?: File) { if (file) setAvatarCropSource(await fileToDataUrl(file)) }
+  async function saveStatusDraft(event: FormEvent) {
+    event.preventDefault()
+    setStatusSaving(true)
+    await onUpdateStatus(statusDraft)
+    setStatusSaving(false)
+  }
   async function askNotifications() {
     if (typeof Notification === 'undefined' || !profile) { setNotificationStatus('unsupported'); onToast('Установите приложение на главный экран'); return }
     try {
@@ -798,7 +791,7 @@ function SettingsView({ role, profile, profileView, onUpdateProfile, onUpdateSta
       </form>}
       {avatarCropSource && <ImageCropper source={avatarCropSource} aspect={1} onCancel={() => setAvatarCropSource(null)} onDone={(image) => { setProfileAvatar(image); setAvatarCropSource(null) }} />}
       {viewedAvatar && <AvatarViewer profile={viewedAvatar} onClose={() => setViewedAvatar(null)} />}
-      <div className="settings-group status-settings"><h3>Мой статус</h3><div className="status-card"><div className="current-status"><span>{profileView.status || 'Без статуса'}</span>{profileView.status && <button onClick={() => void onUpdateStatus('')}>Убрать</button>}</div><div className="status-presets">{statusOptions.map((status) => <button key={status} className={profileView.status === status ? 'active' : ''} onClick={() => void onUpdateStatus(status)}>{status}</button>)}</div><form onSubmit={(event) => { event.preventDefault(); if (!customStatus.trim()) return; void onUpdateStatus(customStatus); setCustomStatus('') }}><input value={customStatus} onChange={(event) => setCustomStatus(event.target.value.slice(0, 40))} placeholder="Добавить свой короткий статус" maxLength={40} /><button disabled={!customStatus.trim()}>Сохранить</button></form><small>{customStatus.length}/40 · партнёр получит уведомление</small></div></div>
+      <div className="settings-group status-settings"><h3>Мой статус</h3><div className="status-card"><div className="current-status"><span>{profileView.status || 'Без статуса'}</span><small>Сейчас отображается в приложении</small></div><div className="status-presets">{statusOptions.map((status) => <button key={status} type="button" className={statusDraft === status ? 'active' : ''} onClick={() => setStatusDraft(status)}>{status}</button>)}</div><form onSubmit={saveStatusDraft}><input value={statusDraft} onChange={(event) => setStatusDraft(event.target.value.slice(0, 40))} placeholder="Добавить свой короткий статус" maxLength={40} /><button type="button" className="clear-status" onClick={() => setStatusDraft('')} disabled={!statusDraft}>Очистить</button><button className="save-status" disabled={statusSaving || statusDraft.trim() === (profileView.status || '')}>{statusSaving ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{statusSaving ? 'Сохраняем…' : 'Сохранить статус'}</button></form><small>{statusDraft.length}/40 · после сохранения статус обновится везде и партнёр получит уведомление</small></div></div>
       <div className="settings-group"><h3>Приложение</h3>
         <button onClick={askNotifications} disabled={notificationLoading}><span className="setting-icon"><BellRing /></span><span><strong>Пуш-уведомления</strong><small>{notificationStatus === 'granted' ? 'Новые желания и сообщения' : notificationStatus === 'denied' ? 'Запрещены в настройках телефона' : notificationStatus === 'unsupported' ? 'Установите приложение на экран Домой' : 'Включить на этом телефоне'}</small></span><em>{notificationLoading ? '…' : notificationStatus === 'granted' ? 'Вкл.' : 'Настроить'}</em></button>
         <button onClick={() => setInstalled(true)}><span className="setting-icon"><Upload /></span><span><strong>Установить приложение</strong><small>{installed ? 'Открывается как приложение' : 'Добавьте на домашний экран'}</small></span><em>{installed ? 'Готово' : 'Как?'}</em></button>

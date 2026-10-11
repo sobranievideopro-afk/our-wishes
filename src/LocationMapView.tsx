@@ -6,18 +6,27 @@ import type { MemberProfile, Role } from './types'
 
 function markerIcon(profile: MemberProfile, role: Role) {
   const root = document.createElement('div')
-  root.className = `map-avatar-marker ${role}`
+  root.className = `map-person-marker ${role}`
+  const avatar = document.createElement('div')
+  avatar.className = `map-avatar-marker ${role}`
   if (profile.avatar) {
     const image = document.createElement('img')
     image.src = profile.avatar
     image.alt = ''
-    root.appendChild(image)
+    avatar.appendChild(image)
   } else {
-    root.textContent = profile.displayName.trim().charAt(0).toLocaleUpperCase('ru') || '♡'
+    avatar.textContent = profile.displayName.trim().charAt(0).toLocaleUpperCase('ru') || '♡'
   }
   const pulse = document.createElement('i')
-  root.appendChild(pulse)
-  return L.divIcon({ html: root, className: 'couple-map-marker', iconSize: [58, 58], iconAnchor: [29, 29] })
+  avatar.appendChild(pulse)
+  root.appendChild(avatar)
+  if (profile.status) {
+    const status = document.createElement('span')
+    status.className = 'map-marker-status'
+    status.textContent = profile.status
+    root.appendChild(status)
+  }
+  return L.divIcon({ html: root, className: 'couple-map-marker', iconSize: [210, 64], iconAnchor: role === 'wife' ? [29, 32] : [181, 32] })
 }
 
 function distanceKm(first: MemberProfile, second: MemberProfile) {
@@ -92,7 +101,7 @@ export function LocationMapView({ role, members, updating, onUpdate, onStop }: {
       {([role, partnerRole] as Role[]).map((memberRole) => {
         const member = members[memberRole]
         const shared = member.latitude != null && member.longitude != null
-        return <article key={memberRole}><div className={`map-profile-avatar ${memberRole}`}>{member.avatar ? <img src={member.avatar} alt="" /> : member.displayName.charAt(0)}</div><div><strong>{member.displayName}</strong><span>{freshness(member.locationUpdatedAt)}</span></div><i className={shared ? 'online' : ''}><MapPin size={14} /></i></article>
+        return <article key={memberRole}><div className={`map-profile-avatar ${memberRole}`}>{member.avatar ? <img src={member.avatar} alt="" /> : member.displayName.charAt(0)}</div><div><strong>{member.displayName}</strong><b className={member.status ? '' : 'empty'}>{member.status || 'Без статуса'}</b><span>{freshness(member.locationUpdatedAt)}</span></div><i className={shared ? 'online' : ''}><MapPin size={14} /></i></article>
       })}
     </div>
     <div className="location-controls">

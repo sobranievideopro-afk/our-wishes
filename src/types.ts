@@ -1,5 +1,5 @@
 export type Role = 'wife' | 'husband'
-export type Tab = 'wishes' | 'moodboard' | 'location' | 'calendar' | 'done' | 'chat' | 'settings'
+export type Tab = 'wishes' | 'location' | 'calendar' | 'done' | 'chat' | 'settings'
 
 export type CategoryId =
   | 'everyday' | 'anniversary' | 'new-year' | 'march-8' | 'places'
