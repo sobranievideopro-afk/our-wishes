@@ -244,13 +244,21 @@ function App() {
       setCloudProfile((current) => current ? { ...current, status: value || undefined } : current)
       try {
         await updateCloudStatus(value)
-        void notifyPartner('status', value || `${cloudProfile.displayName} убрал(а) статус`, `${location.origin}${location.pathname}`).catch(() => setToast('Статус сохранён, но push не отправлен'))
       } catch {
         setData((current) => ({ ...current, members: { ...current.members, [role]: previous } }))
         setCloudProfile((current) => current ? { ...current, status: previous.status } : current)
         setToast('Не удалось обновить статус')
         return
       }
+      try {
+        const sent = await notifyPartner('status', value || `${cloudProfile.displayName} убрал(а) статус`, `${location.origin}${location.pathname}`)
+        setToast(sent > 0
+          ? `${value ? 'Статус обновлён' : 'Статус очищен'} · push отправлен`
+          : 'Статус сохранён · включите уведомления на телефоне партнёра')
+      } catch {
+        setToast('Статус сохранён, но push не отправлен')
+      }
+      return
     } else {
       setDemoProfiles((current) => {
         const next = { ...current, [role]: { ...current[role], status: value || undefined } }

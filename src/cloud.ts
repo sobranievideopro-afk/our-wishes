@@ -350,9 +350,10 @@ export async function enableCloudPush(profile: CloudProfile) {
   return true
 }
 
-export async function notifyPartner(kind: 'wish' | 'message' | 'status', body: string, url: string) {
-  const { error } = await client().functions.invoke('push-notify', { body: { action: 'notify', kind, body: body.slice(0, 180), url } })
+export async function notifyPartner(kind: 'wish' | 'message' | 'status', body: string, url: string): Promise<number> {
+  const { data, error } = await client().functions.invoke('push-notify', { body: { action: 'notify', kind, body: body.slice(0, 180), url } })
   if (error) throw error
+  return Number(data?.sent || 0)
 }
 
 export function subscribeToCloud(profile: CloudProfile, refresh: () => void): RealtimeChannel {
