@@ -1,5 +1,5 @@
 export type Role = 'wife' | 'husband'
-export type Tab = 'wishes' | 'moodboard' | 'calendar' | 'done' | 'chat' | 'settings'
+export type Tab = 'wishes' | 'moodboard' | 'location' | 'calendar' | 'done' | 'chat' | 'settings'
 
 export type CategoryId =
   | 'everyday' | 'anniversary' | 'new-year' | 'march-8' | 'places'
@@ -40,6 +40,7 @@ export interface ChatMessage {
   author: Role
   text?: string
   image?: string
+  video?: string
   createdAt: string
   read: boolean
   likedByMe?: boolean
@@ -61,6 +62,10 @@ export interface CalendarEvent {
 export interface MemberProfile {
   displayName: string
   avatar?: string
+  status?: string
+  latitude?: number
+  longitude?: number
+  locationUpdatedAt?: string
 }
 
 export interface AppData {

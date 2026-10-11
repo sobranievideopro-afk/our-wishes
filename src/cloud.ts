@@ -8,6 +8,10 @@ export interface CloudProfile {
   role: Role
   displayName: string
   avatar?: string
+  status?: string
+  latitude?: number
+  longitude?: number
+  locationUpdatedAt?: string
   inviteCode: string
   email?: string
   anonymous?: boolean
@@ -40,7 +44,7 @@ export async function restoreProfile(): Promise<CloudProfile | null> {
   const api = client()
   const { data: sessionData } = await api.auth.getSession()
   if (!sessionData.session) return null
-  const { data: profile } = await retryResult(() => api.from('profiles').select('id,couple_id,role,display_name,avatar_path').eq('id', sessionData.session.user.id).maybeSingle())
+  const { data: profile } = await retryResult(() => api.from('profiles').select('id,couple_id,role,display_name,avatar_path,status,latitude,longitude,location_updated_at').eq('id', sessionData.session.user.id).maybeSingle())
   if (!profile?.couple_id || !profile.role) return null
   const { data: couple } = await retryResult(() => api.from('couples').select('invite_code').eq('id', profile.couple_id).single())
   return {
@@ -49,6 +53,10 @@ export async function restoreProfile(): Promise<CloudProfile | null> {
     role: profile.role as Role,
     displayName: profile.display_name,
     avatar: await mediaUrl(profile.avatar_path),
+    status: profile.status || undefined,
+    latitude: profile.latitude == null ? undefined : Number(profile.latitude),
+    longitude: profile.longitude == null ? undefined : Number(profile.longitude),
+    locationUpdatedAt: profile.location_updated_at || undefined,
     inviteCode: couple?.invite_code || '',
     email: sessionData.session.user.email,
     anonymous: sessionData.session.user.is_anonymous,
@@ -114,7 +122,7 @@ export async function joinCloudCouple(code: string): Promise<CloudProfile> {
 
 async function mediaUrl(path?: string | null) {
   if (!path) return undefined
-  if (/^(https?:|data:)/.test(path)) return path
+  if (/^(https?:|data:|blob:)/.test(path)) return path
   const cacheKey = `our-wishes-media:${path}`
   try {
     const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null')
@@ -135,7 +143,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     retryResult(() => api.from('wish_likes').select('*')),
     profile.role === 'husband' ? retryResult(() => api.from('wish_reservations').select('*')) : Promise.resolve({ data: [] }),
     retryResult(() => api.from('messages').select('*').eq('couple_id', profile.coupleId).order('created_at')),
-    retryResult(() => api.from('profiles').select('id,role,display_name,avatar_path').eq('couple_id', profile.coupleId)),
+    retryResult(() => api.from('profiles').select('id,role,display_name,avatar_path,status,latitude,longitude,location_updated_at').eq('couple_id', profile.coupleId)),
     retryResult(() => api.from('couple_events').select('*').eq('couple_id', profile.coupleId).order('event_date')),
     retryResult(() => api.from('message_likes').select('*')),
     profile.role === 'husband' ? retryResult(() => api.from('wish_views').select('wish_id').eq('user_id', profile.id)) : Promise.resolve({ data: [] }),
@@ -146,7 +154,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
   const members: Record<Role, MemberProfile> = { wife: { displayName: 'Алла' }, husband: { displayName: 'Стас' } }
   await Promise.all(profileRows.map(async (item: any) => {
     const memberRole = item.role as Role
-    members[memberRole] = { displayName: item.display_name || (memberRole === 'wife' ? 'Алла' : 'Стас'), avatar: await mediaUrl(item.avatar_path) }
+    members[memberRole] = { displayName: item.display_name || (memberRole === 'wife' ? 'Алла' : 'Стас'), avatar: await mediaUrl(item.avatar_path), status: item.status || undefined, latitude: item.latitude == null ? undefined : Number(item.latitude), longitude: item.longitude == null ? undefined : Number(item.longitude), locationUpdatedAt: item.location_updated_at || undefined }
   }))
   const likedIds = new Set((likesResult.data || []).filter((item: any) => item.user_id === profile.id).map((item: any) => item.wish_id))
   const reservedIds = new Set((reservationsResult.data || []).map((item: any) => item.wish_id))
@@ -175,7 +183,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     unreadComments: commentRows.filter((comment: any) => comment.wish_id === row.id && comment.author_id !== profile.id && new Date(comment.created_at).getTime() > (commentViewedAt.get(row.id) || 0)).length,
   })))
   const comments: WishComment[] = commentRows.map((row: any) => ({ id: row.id, wishId: row.wish_id, author: roleById.get(row.author_id) || 'wife', text: row.text, createdAt: row.created_at }))
-  const messages: ChatMessage[] = await Promise.all((messagesResult.data || []).map(async (row: any) => ({ id: row.id, author: roleById.get(row.author_id) || 'wife', text: row.text || undefined, image: await mediaUrl(row.image_path), createdAt: row.created_at, read: true, likedByMe: messageLikeRows.some((like: any) => like.message_id === row.id && like.user_id === profile.id), likeCount: messageLikeRows.filter((like: any) => like.message_id === row.id).length })))
+  const messages: ChatMessage[] = await Promise.all((messagesResult.data || []).map(async (row: any) => ({ id: row.id, author: roleById.get(row.author_id) || 'wife', text: row.text || undefined, image: await mediaUrl(row.image_path), video: await mediaUrl(row.video_path), createdAt: row.created_at, read: true, likedByMe: messageLikeRows.some((like: any) => like.message_id === row.id && like.user_id === profile.id), likeCount: messageLikeRows.filter((like: any) => like.message_id === row.id).length })))
   const events: CalendarEvent[] = (eventsResult.data || []).map((row: any) => ({ id: row.id, title: row.title, date: row.event_date, time: row.event_time?.slice(0, 5) || undefined, note: row.note || undefined, emojis: row.emojis || [], color: row.event_color === 'work' ? 'work' : 'family', author: roleById.get(row.author_id) || 'wife', createdAt: row.created_at }))
   return { wishes, comments, messages, events, members }
 }
@@ -217,6 +225,18 @@ export async function updateCloudProfile(profile: CloudProfile, displayName: str
   return { displayName, avatar: imageChanged ? await mediaUrl(avatarPath) : avatar }
 }
 
+export async function updateCloudStatus(status: string) {
+  const session = (await client().auth.getSession()).data.session
+  if (!session) throw new Error('Требуется вход')
+  await retryResult(() => client().from('profiles').update({ status: status || null, status_updated_at: new Date().toISOString() }).eq('id', session.user.id))
+}
+
+export async function updateCloudLocation(latitude: number | null, longitude: number | null) {
+  const session = (await client().auth.getSession()).data.session
+  if (!session) throw new Error('Требуется вход')
+  await retryResult(() => client().from('profiles').update({ latitude, longitude, location_updated_at: latitude == null ? null : new Date().toISOString() }).eq('id', session.user.id))
+}
+
 export async function insertCloudWish(wish: Wish, profile: CloudProfile) {
   const coverPath = await uploadDataUrl(wish.image, profile, 'wishes')
   await retryResult(() => client().from('wishes').insert({
@@ -252,6 +272,15 @@ export async function insertCloudComment(comment: WishComment, profile: CloudPro
   await retryResult(() => client().from('wish_comments').insert({ id: comment.id, wish_id: comment.wishId, author_id: profile.id, text: comment.text }))
 }
 
+async function uploadVideo(source: string, profile: CloudProfile) {
+  const response = await fetch(source)
+  const blob = await response.blob()
+  const extension = blob.type.includes('mp4') ? 'mp4' : blob.type.includes('quicktime') ? 'mov' : 'webm'
+  const path = `${profile.coupleId}/chat/${uid('circle')}.${extension}`
+  await retryResult(() => client().storage.from('couple-media').upload(path, blob, { contentType: blob.type || `video/${extension}`, cacheControl: '31536000', upsert: false }))
+  return path
+}
+
 export async function markCloudCommentsSeen(wishId: string, profile: CloudProfile) {
   await retryResult(() => client().from('wish_comment_views').upsert({ wish_id: wishId, user_id: profile.id, viewed_at: new Date().toISOString() }, { onConflict: 'wish_id,user_id' }))
 }
@@ -274,7 +303,8 @@ export async function setCloudCompleted(wishId: string, completed: boolean) {
 
 export async function insertCloudMessage(message: ChatMessage, profile: CloudProfile) {
   const imagePath = await uploadDataUrl(message.image, profile, 'chat')
-  await retryResult(() => client().from('messages').insert({ id: message.id, couple_id: profile.coupleId, author_id: profile.id, text: message.text, image_path: imagePath }))
+  const videoPath = message.video ? await uploadVideo(message.video, profile) : undefined
+  await retryResult(() => client().from('messages').insert({ id: message.id, couple_id: profile.coupleId, author_id: profile.id, text: message.text, image_path: imagePath, video_path: videoPath }))
 }
 
 export async function deleteCloudMessage(messageId: string) {
@@ -320,7 +350,7 @@ export async function enableCloudPush(profile: CloudProfile) {
   return true
 }
 
-export async function notifyPartner(kind: 'wish' | 'message', body: string, url: string) {
+export async function notifyPartner(kind: 'wish' | 'message' | 'status', body: string, url: string) {
   const { error } = await client().functions.invoke('push-notify', { body: { action: 'notify', kind, body: body.slice(0, 180), url } })
   if (error) throw error
 }

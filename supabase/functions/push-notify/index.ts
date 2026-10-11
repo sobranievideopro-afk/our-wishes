@@ -42,7 +42,7 @@ Deno.serve(async (request) => {
     const body = await request.json()
     const app = await applicationServer(admin)
     if (body.action === 'vapid-key') return Response.json({ publicKey: app.publicKey }, { headers: cors })
-    if (body.action !== 'notify' || !['wish', 'message'].includes(body.kind)) return Response.json({ error: 'Unsupported action' }, { status: 400, headers: cors })
+    if (body.action !== 'notify' || !['wish', 'message', 'status'].includes(body.kind)) return Response.json({ error: 'Unsupported action' }, { status: 400, headers: cors })
 
     const { data: profile } = await admin.from('profiles').select('couple_id,display_name').eq('id', user.id).single()
     if (!profile?.couple_id) return Response.json({ sent: 0 }, { headers: cors })
@@ -51,8 +51,8 @@ Deno.serve(async (request) => {
     if (!partnerIds.length) return Response.json({ sent: 0 }, { headers: cors })
     const { data: subscriptions } = await admin.from('push_subscriptions').select('id,endpoint,p256dh,auth').in('user_id', partnerIds)
 
-    const kind = body.kind as 'wish' | 'message'
-    const title = kind === 'wish' ? 'Новое желание Аллы 💗' : `${profile.display_name || 'Любимый человек'} написал(а)`
+    const kind = body.kind as 'wish' | 'message' | 'status'
+    const title = kind === 'wish' ? 'Новое желание Аллы 💗' : kind === 'status' ? `${profile.display_name || 'Любимый человек'} делится настроением` : `${profile.display_name || 'Любимый человек'} написал(а)`
     const destination = typeof body.url === 'string' && body.url.startsWith(liveBase) ? body.url : liveBase
     const payload = JSON.stringify({ title, body: String(body.body || '').slice(0, 180), url: destination, kind })
     const results = await Promise.allSettled((subscriptions || []).map(async (row) => {
