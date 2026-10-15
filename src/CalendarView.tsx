@@ -51,7 +51,7 @@ export function CalendarView({ events, wishes, role, onAdd, onUpdate, onDelete, 
   }, [month])
   const sorted = useMemo(() => [...events].sort((a, b) => `${a.date} ${a.time || ''}`.localeCompare(`${b.date} ${b.time || ''}`)), [events])
   const upcoming = sorted.filter((event) => event.date >= dateKey(today)).slice(0, 5)
-  const datedWishes = role === 'husband' ? wishes.filter((wish) => wish.targetDate && !wish.completedAt) : []
+  const datedWishes = wishes.filter((wish) => wish.targetDate && !wish.completedAt)
   const title = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' }).format(month)
 
   function openFor(date?: string) {

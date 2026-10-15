@@ -7,6 +7,7 @@ export type CategoryId =
 
 export interface Wish {
   id: string
+  owner: Role
   title: string
   description: string
   link?: string
@@ -22,7 +23,7 @@ export interface Wish {
   reservedByHusband?: boolean
   likedByHusband?: boolean
   completionNote?: string
-  isNewForHusband?: boolean
+  isNewForViewer?: boolean
   unreadComments?: number
   unreadCommentRoles?: Role[]
 }

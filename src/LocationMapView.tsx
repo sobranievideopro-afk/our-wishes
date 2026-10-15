@@ -52,10 +52,11 @@ function freshness(value?: string) {
   return `Обновлено ${new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value))}`
 }
 
-export function LocationMapView({ role, members, updating, onUpdate, onStop }: {
+export function LocationMapView({ role, members, updating, tracking, onUpdate, onStop }: {
   role: Role
   members: Record<Role, MemberProfile>
   updating: boolean
+  tracking: boolean
   onUpdate: () => void
   onStop: () => void
 }) {
@@ -95,7 +96,7 @@ export function LocationMapView({ role, members, updating, onUpdate, onStop }: {
   }, [members.wife.latitude, members.wife.longitude, members.wife.avatar, members.wife.displayName, members.husband.latitude, members.husband.longitude, members.husband.avatar, members.husband.displayName])
 
   return <div className="page location-page">
-    <section className="location-heading"><div><p className="eyebrow">Вы рядом, даже когда не рядом</p><h1>Наша карта</h1><p>Геопозиция обновляется только по вашему нажатию и видна лишь вашей паре.</p></div><div className="distance-card"><Navigation size={20} /><strong>{distance == null ? '—' : formatDistance(distance).split(' ')[0]}</strong><span>{distance == null ? 'расстояние' : formatDistance(distance).split(' ').slice(1).join(' ')}</span></div></section>
+    <section className="location-heading"><div><p className="eyebrow">Вы рядом, даже когда не рядом</p><h1>Наша карта</h1><p>{tracking ? 'Автообновление включено: координаты меняются без перезагрузки, пока приложение активно.' : 'Включите передачу — координаты будут автоматически обновляться и видны только вашей паре.'}</p></div><div className="distance-card"><Navigation size={20} /><strong>{distance == null ? '—' : formatDistance(distance).split(' ')[0]}</strong><span>{distance == null ? 'расстояние' : formatDistance(distance).split(' ').slice(1).join(' ')}</span></div></section>
     <div className={`couple-map ${mapReady ? 'ready' : ''}`} ref={containerRef} />
     <div className="map-status-grid">
       {([role, partnerRole] as Role[]).map((memberRole) => {
@@ -105,9 +106,11 @@ export function LocationMapView({ role, members, updating, onUpdate, onStop }: {
       })}
     </div>
     <div className="location-controls">
-      <button className="primary-button" onClick={onUpdate} disabled={updating}><Crosshair size={18} />{updating ? 'Определяем…' : currentShared ? 'Обновить мою геопозицию' : 'Поделиться геопозицией'}</button>
+      <button className="primary-button" onClick={onUpdate} disabled={updating}><Crosshair size={18} />{updating ? 'Определяем…' : tracking ? 'Обновить сейчас' : 'Включить автообновление'}</button>
+      {tracking && <span className="location-live"><i />Обновляется автоматически</span>}
       {currentShared && <button className="secondary-button" onClick={onStop}>Перестать делиться</button>}
     </div>
+    {tracking && <p className="location-ios-note">На iPhone обновление приостанавливается, когда приложение полностью закрыто, и возобновляется сразу после открытия.</p>}
     {!partnerShared && <div className="location-hint"><ShieldCheck size={19} /><p><strong>{partner.displayName} ещё не поделился(ась) геопозицией</strong><span>Как только это произойдёт, на карте появится второй аватар и расстояние между вами.</span></p></div>}
   </div>
 }

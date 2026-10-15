@@ -146,7 +146,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     retryResult(() => api.from('profiles').select('id,role,display_name,avatar_path,status,latitude,longitude,location_updated_at').eq('couple_id', profile.coupleId)),
     retryResult(() => api.from('couple_events').select('*').eq('couple_id', profile.coupleId).order('event_date')),
     retryResult(() => api.from('message_likes').select('*')),
-    profile.role === 'husband' ? retryResult(() => api.from('wish_views').select('wish_id').eq('user_id', profile.id)) : Promise.resolve({ data: [] }),
+    retryResult(() => api.from('wish_views').select('wish_id').eq('user_id', profile.id)),
     retryResult(() => api.from('wish_comment_views').select('wish_id,viewed_at').eq('user_id', profile.id)),
   ])
   const profileRows = profilesResult.data || []
@@ -165,6 +165,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
 
   const wishes: Wish[] = await Promise.all((wishesResult.data || []).map(async (row: any) => ({
     id: row.id,
+    owner: roleById.get(row.author_id) || 'wife',
     title: row.title,
     description: row.description || '',
     link: row.source_url || undefined,
@@ -179,7 +180,7 @@ export async function fetchCloudData(profile: CloudProfile): Promise<AppData> {
     completionNote: row.completion_note || undefined,
     likedByHusband: likedIds.has(row.id),
     reservedByHusband: reservedIds.has(row.id),
-    isNewForHusband: profile.role === 'husband' && !viewedWishIds.has(row.id),
+    isNewForViewer: row.author_id !== profile.id && !viewedWishIds.has(row.id),
     unreadComments: commentRows.filter((comment: any) => comment.wish_id === row.id && comment.author_id !== profile.id && new Date(comment.created_at).getTime() > (commentViewedAt.get(row.id) || 0)).length,
   })))
   const comments: WishComment[] = commentRows.map((row: any) => ({ id: row.id, wishId: row.wish_id, author: roleById.get(row.author_id) || 'wife', text: row.text, createdAt: row.created_at }))
